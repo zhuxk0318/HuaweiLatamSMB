@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env.local
+
+quote-agent/.venv/
+quote-agent/.pytest_cache/
+quote-agent/**/__pycache__/
+quote-agent/*.egg-info/
+quote-agent/UNKNOWN.egg-info/
+
+*.log
+.DS_Store

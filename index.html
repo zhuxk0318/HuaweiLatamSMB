@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <script>
+      window.__GA_MEASUREMENT_ID__ = "%VITE_GA_MEASUREMENT_ID%";
+      if (window.__GA_MEASUREMENT_ID__) {
+        window.dataLayer = window.dataLayer || [];
+        function gtag() {
+          window.dataLayer.push(arguments);
+        }
+        window.gtag = window.gtag || gtag;
+        window.gtag("js", new Date());
+        window.gtag("config", window.__GA_MEASUREMENT_ID__, { send_page_view: false });
+        const gaScript = document.createElement("script");
+        gaScript.async = true;
+        gaScript.src =
+          "https://www.googletagmanager.com/gtag/js?id=" +
+          encodeURIComponent(window.__GA_MEASUREMENT_ID__);
+        document.head.appendChild(gaScript);
+      }
+    </script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Huawei LATAM SMB Solutions portal for digital transformation: cloud, AI, data, security, connectivity, and business applications for small and medium-sized businesses."
+    />
+    <title>Huawei LATAM - SMB Solutions</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
