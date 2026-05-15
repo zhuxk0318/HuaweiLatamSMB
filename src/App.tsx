@@ -5,7 +5,7 @@ import {
   Calculator,
   Layers3,
 } from "lucide-react";
-import { PricingEstimator } from "./components/PricingEstimator";
+import { QuoteEstimatorHub } from "./components/QuoteEstimatorHub";
 import { SolutionDetailPage } from "./components/SolutionDetailPage";
 import { SolutionExplorer, getValidSolutionEntry } from "./components/SolutionExplorer";
 import { initAnalytics, trackClick, trackPageView } from "./analytics";
@@ -16,7 +16,7 @@ type Route = "home" | "estimator" | "solutionsIndex" | "solution";
 
 function getInitialLang(): Lang {
   const stored = window.localStorage.getItem("huawei-latam-smb-lang");
-  return stored === "zh" || stored === "en" ? stored : "es";
+  return stored === "en" ? stored : "es";
 }
 
 function getRoute(): Route {
@@ -77,13 +77,6 @@ const estimatorCta = {
     body:
       "Use the estimator as a separate tool to review regions, cached pricing, and monthly estimates before a cloud migration.",
     action: "Open estimator",
-  },
-  zh: {
-    kicker: "Cloud Estimator",
-    title: "基于 RVTools 估算 ECS 与 EVS",
-    body:
-      "将报价器作为独立工具使用，在云迁移前查看区域、缓存价格和月度估算。",
-    action: "打开报价器",
   },
 } satisfies Record<Lang, { kicker: string; title: string; body: string; action: string }>;
 
@@ -279,20 +272,6 @@ function SiteHeader({
         >
           EN
         </button>
-        <button
-          type="button"
-          className={lang === "zh" ? "active" : ""}
-          onClick={() => {
-            trackClick({
-              click_target: "language_zh",
-              click_section: "header",
-              destination: "zh",
-            });
-            setLang("zh");
-          }}
-        >
-          中文
-        </button>
       </div>
     </header>
   );
@@ -429,7 +408,7 @@ function HomePage({ lang }: { lang: Lang }) {
         <div className="value-proposition-panel">
           <img
             src="/assets/huawei/huawei_cloud_smb_value_propositions_with_descriptions.svg"
-            alt={lang === "zh" ? "华为云 SMB 五大价值定位" : "Huawei Cloud SMB value propositions"}
+            alt="Huawei Cloud SMB value propositions"
           />
         </div>
       </section>
@@ -485,7 +464,7 @@ function HomePage({ lang }: { lang: Lang }) {
                   <strong>{textFor(lang, entry.title)}</strong>
                   <small>{textFor(lang, entry.summary)}</small>
                   <span className="solution-domain-entry-action">
-                    {lang === "es" ? "Explorar escenarios" : lang === "zh" ? "Explore scenarios" : "Explore scenarios"}
+                    {lang === "es" ? "Explorar escenarios" : "Explore scenarios"}
                     <ArrowRight size={16} />
                   </span>
                 </span>
@@ -541,7 +520,7 @@ function SolutionsIndexPage({ lang }: { lang: Lang }) {
 function EstimatorPage({ lang }: { lang: Lang }) {
   return (
     <main id="top" className="estimator-page">
-      <PricingEstimator lang={lang} />
+      <QuoteEstimatorHub lang={lang} />
     </main>
   );
 }
@@ -570,7 +549,7 @@ function App() {
 
   useEffect(() => {
     window.localStorage.setItem("huawei-latam-smb-lang", lang);
-    document.documentElement.lang = lang === "zh" ? "zh-CN" : lang;
+    document.documentElement.lang = lang;
   }, [lang]);
 
   useEffect(() => {

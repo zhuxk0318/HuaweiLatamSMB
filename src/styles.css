@@ -1516,6 +1516,20 @@ a {
   gap: 18px;
 }
 
+.quote-mode-switch {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.quote-mode-switch strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
 .estimator-page {
   padding: 38px 0 72px;
 }
@@ -1607,6 +1621,47 @@ a {
   margin-bottom: 10px;
   color: var(--text);
   font-weight: 650;
+}
+
+.flexible-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.flexible-form-grid label,
+.flexible-feedback-grid input,
+.flexible-feedback-grid select {
+  display: grid;
+  gap: 6px;
+}
+
+.flexible-form-grid span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.flexible-form-grid input,
+.flexible-form-grid select,
+.flexible-form-grid textarea,
+.flexible-feedback-grid input,
+.flexible-feedback-grid select {
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--text);
+}
+
+.flexible-form-grid textarea {
+  resize: vertical;
+}
+
+.flexible-notes-field {
+  grid-column: 1 / -1;
 }
 
 .segmented-control {
@@ -1844,6 +1899,175 @@ a {
   margin-top: 14px;
 }
 
+.flexible-catalog-group + .flexible-catalog-group {
+  margin-top: 14px;
+}
+
+.flexible-catalog-group strong {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.flexible-blockers {
+  display: grid;
+  gap: 12px;
+}
+
+.spin-icon {
+  animation: estimator-spin 1s linear infinite;
+}
+
+@keyframes estimator-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.row-quote-progress-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.row-quote-progress-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.row-quote-progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--blue);
+  transition: width 0.3s ease;
+}
+
+.row-quote-progress-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.flexible-progress-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.flexible-progress-step {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.flexible-progress-step strong,
+.flexible-progress-step span,
+.flexible-progress-step small {
+  display: block;
+}
+
+.flexible-progress-step span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.flexible-progress-step small {
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.flexible-progress-step.status-running {
+  border-color: rgba(21, 94, 239, 0.28);
+  box-shadow: inset 3px 0 0 var(--blue);
+}
+
+.flexible-progress-step.status-completed {
+  border-color: rgba(8, 127, 91, 0.22);
+  box-shadow: inset 3px 0 0 var(--green);
+}
+
+.flexible-progress-step.status-failed {
+  border-color: rgba(199, 0, 11, 0.26);
+  box-shadow: inset 3px 0 0 var(--red);
+}
+
+.flexible-progress-step.status-skipped {
+  opacity: 0.72;
+}
+
+.flexible-diagnostics {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.flexible-diagnostics strong {
+  display: block;
+}
+
+.flexible-diagnostic-card {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.flexible-diagnostic-card span,
+.flexible-diagnostic-card small {
+  display: block;
+}
+
+.flexible-diagnostic-card small {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.flexible-catalog-scroll {
+  display: grid;
+  gap: 14px;
+  max-height: 520px;
+  overflow: auto;
+}
+
+.flexible-blocker-card {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.flexible-blocker-card strong,
+.flexible-blocker-card small {
+  display: block;
+}
+
+.flexible-blocker-card small {
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.flexible-feedback-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
 .pricing-tables {
   display: grid;
   gap: 14px;
@@ -1938,6 +2162,11 @@ a {
 
   .solution-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .flexible-form-grid,
+  .flexible-feedback-grid {
+    grid-template-columns: 1fr;
   }
 
   .footer-link-grid {

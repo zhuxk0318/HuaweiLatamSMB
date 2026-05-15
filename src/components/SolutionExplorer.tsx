@@ -1,9 +1,9 @@
-import { ArrowRight, ExternalLink, Sparkles } from "lucide-react";
+import { ArrowRight, ExternalLink } from "lucide-react";
 import { trackClick } from "../analytics";
 import type { Lang } from "../data/i18n";
 import {
   solutionEntries,
-  solutionScenarios,
+  solutionScenarioMap,
   textFor,
   type SolutionEntry,
   type SolutionEntryId,
@@ -21,36 +21,20 @@ const labels = {
     title: "Start from business needs. Deliver with ready-to-use scenarios.",
     body:
       "Explore practical AI and cloud solutions for SMBs, with scenario guidance, GitHub skills, and quick integration paths.",
-    recommended: "Recommended from this entry",
-    allScenarios: "Ocho escenarios SMB",
+    allScenarios: "Escenarios de esta solución",
     viewSolution: "Ver solución",
     viewSkill: "Ver demo / skill",
     quickIntegration: "Integración rápida",
-    estimator: "Abrir cotizador cloud",
   },
   en: {
     kicker: "Solution Playbook",
     title: "Start from business needs. Deliver with ready-to-use scenarios.",
     body:
       "Explore practical AI and cloud solutions for SMBs, with scenario guidance, GitHub skills, and quick integration paths.",
-    recommended: "Recommended from this entry",
-    allScenarios: "Eight SMB scenarios",
+    allScenarios: "Scenarios in this solution area",
     viewSolution: "View solution",
     viewSkill: "View demo / skill",
     quickIntegration: "Quick integration",
-    estimator: "Open cloud estimator",
-  },
-  zh: {
-    kicker: "Solution Playbook",
-    title: "Start from business needs. Deliver with ready-to-use scenarios.",
-    body:
-      "Explore practical AI and cloud solutions for SMBs, with scenario guidance, GitHub skills, and quick integration paths.",
-    recommended: "Recommended from this entry",
-    allScenarios: "Eight SMB scenarios",
-    viewSolution: "View solution",
-    viewSkill: "View demo / skill",
-    quickIntegration: "Quick integration",
-    estimator: "Open cloud estimator",
   },
 } satisfies Record<
   Lang,
@@ -58,12 +42,10 @@ const labels = {
     kicker: string;
     title: string;
     body: string;
-    recommended: string;
     allScenarios: string;
     viewSolution: string;
     viewSkill: string;
     quickIntegration: string;
-    estimator: string;
   }
 >;
 
@@ -71,16 +53,10 @@ function isValidEntry(entryId?: string): entryId is SolutionEntryId {
   return solutionEntries.some((entry) => entry.id === entryId);
 }
 
-function sortScenarios(activeEntry: SolutionEntry) {
-  const recommendedIds = new Set(activeEntry.scenarioIds);
-  return [...solutionScenarios].sort((left, right) => {
-    const leftRecommended = recommendedIds.has(left.id);
-    const rightRecommended = recommendedIds.has(right.id);
-    if (leftRecommended !== rightRecommended) {
-      return leftRecommended ? -1 : 1;
-    }
-    return solutionScenarios.findIndex((item) => item.id === left.id) - solutionScenarios.findIndex((item) => item.id === right.id);
-  });
+function entryScenarios(activeEntry: SolutionEntry) {
+  return activeEntry.scenarioIds
+    .map((scenarioId) => solutionScenarioMap[scenarioId])
+    .filter((scenario): scenario is SolutionScenario => Boolean(scenario));
 }
 
 function ScenarioCard({
@@ -94,21 +70,14 @@ function ScenarioCard({
 }) {
   const l = labels[lang];
   const primarySkill = scenario.demoSkillLinks[0];
-  const recommended = activeEntry.scenarioIds.includes(scenario.id);
   const scenarioEntry = solutionEntries.find((entry) => entry.id === scenario.entryId) ?? activeEntry;
 
   return (
-    <article className={recommended ? "scenario-card recommended" : "scenario-card"}>
+    <article className="scenario-card">
       <img src={scenario.heroImage} alt="" loading="lazy" />
       <div className="scenario-card-body">
         <div className="scenario-card-heading">
           <span className="scenario-entry-badge">{textFor(lang, scenarioEntry.title)}</span>
-          {recommended ? (
-            <span className="scenario-recommended-badge">
-              <Sparkles size={14} />
-              {l.recommended}
-            </span>
-          ) : null}
         </div>
         <h3>{textFor(lang, scenario.title)}</h3>
         <p>{textFor(lang, scenario.oneLiner)}</p>
@@ -179,7 +148,7 @@ function ScenarioCard({
 export function SolutionExplorer({ lang, initialEntryId }: SolutionExplorerProps) {
   const l = labels[lang];
   const activeEntry = solutionEntries.find((entry) => entry.id === initialEntryId) ?? solutionEntries[0];
-  const orderedScenarios = sortScenarios(activeEntry);
+  const orderedScenarios = entryScenarios(activeEntry);
 
   return (
     <div className="solution-playbook">
@@ -189,19 +158,6 @@ export function SolutionExplorer({ lang, initialEntryId }: SolutionExplorerProps
           <h2>{l.title}</h2>
           <p>{l.body}</p>
         </div>
-        <a
-          className="secondary-action light"
-          href="#/estimator"
-          onClick={() =>
-            trackClick({
-              click_target: "solutions_estimator_cta",
-              click_section: "solutions_playbook_hero",
-              destination: "#/estimator",
-            })
-          }
-        >
-          {l.estimator}
-        </a>
       </section>
 
       <section className="playbook-entry-grid">
@@ -241,9 +197,11 @@ export function SolutionExplorer({ lang, initialEntryId }: SolutionExplorerProps
 
       <section className="scenario-section">
         <div className="section-heading">
-          <span className="section-kicker">{l.allScenarios}</span>
+          <span className="section-kicker">
+            {orderedScenarios.length} {lang === "es" ? "escenarios" : "scenarios"}
+          </span>
           <h3>{textFor(lang, activeEntry.title)}</h3>
-          <p>{textFor(lang, activeEntry.summary)}</p>
+          <p>{l.allScenarios}</p>
         </div>
         <div className="scenario-grid">
           {orderedScenarios.map((scenario) => (

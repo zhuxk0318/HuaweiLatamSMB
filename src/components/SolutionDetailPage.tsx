@@ -47,25 +47,6 @@ const labels = {
     estimator: "Open cloud estimator",
     overview: "Browse all scenarios",
   },
-  zh: {
-    back: "Back to playbook",
-    missing: "Scenario not found",
-    missingBody: "Review the playbook and select one of the available scenarios.",
-    targetCustomers: "Target customers",
-    painPoints: "Customer pain points",
-    solutionApproach: "Huawei Cloud approach",
-    services: "Recommended services",
-    demoSkills: "Demo and GitHub skills",
-    quickIntegration: "Quick integration",
-    prerequisites: "Prerequisites",
-    steps: "Integration steps",
-    configuration: "Configuration notes",
-    apiAccess: "API and access pattern",
-    salesTalkTrack: "Sales talk track",
-    expectedOutcomes: "Expected outcomes",
-    estimator: "Open cloud estimator",
-    overview: "Browse all scenarios",
-  },
 } satisfies Record<Lang, Record<string, string>>;
 
 function textList(lang: Lang, items: LocalizedPair[]) {

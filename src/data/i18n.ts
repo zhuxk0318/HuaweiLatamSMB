@@ -1,4 +1,4 @@
-export type Lang = "es" | "en" | "zh";
+export type Lang = "es" | "en";
 
 type Copy = {
   nav: {
@@ -210,92 +210,6 @@ export const copy: Record<Lang, Copy> = {
         label: "LATAM Regions",
         href: "https://support.huaweicloud.com/intl/en-us/productdesc-cc/cc_01_0003.html",
         description: "Huawei Cloud regions listed by geography, including LATAM.",
-      },
-    ],
-  },
-  zh: {
-    nav: {
-      home: "首页",
-      highlights: "亮点",
-      solutions: "解决方案",
-      quote: "云迁移报价器",
-      journey: "路线图",
-      resources: "资源",
-    },
-    hero: {
-      eyebrow: "Huawei LATAM SMB Solutions",
-      title: "面向拉美中小企业的数字化解决方案",
-      body:
-        "围绕云、AI、数据、安全、连接和企业应用能力，帮助拉美中小企业推进数字化升级。",
-      primary: "查看亮点",
-      secondary: "浏览解决方案",
-    },
-    stats: [
-      { label: "全球覆盖", value: "170+", note: "华为业务覆盖的国家和地区" },
-      { label: "服务人群", value: "3B+", note: "华为解决方案服务的用户规模" },
-      { label: "拉美能力", value: "5", note: "面向本地场景列出的云 Region" },
-      { label: "方案模块", value: "48", note: "按业务需求组织的方案组合" },
-    ],
-    sections: {
-      latam: "支撑拉美 SMB 增长的数字化基础",
-      latamBody:
-        "方案组合覆盖云、AI、数据、安全、连接和企业应用能力，支撑网站与应用、ERP/SAP、备份、分支、自动化和分析等 SMB 高频场景。",
-      highlights: "中小企业最关注的能力",
-      highlightsBody:
-        "面向拉美中小企业的数字化重点摘要，突出安全、迁移、数据、AI 和本地服务能力。",
-      solutions: "SMB Solution Playbook",
-      solutionsBody:
-        "从三个商业入口进入，再转入八个具体场景，逐步查看 GitHub Skill、客户价值和快速集成步骤。",
-      journey: "SMB 推荐数字化路线图",
-      journeyBody:
-        "中小企业不需要一次性采用全部能力。路径先建立安全基础，再现代化关键流程，随后进入数据与 AI。",
-      resources: "公开资源",
-    },
-    solutions: {
-      cards: "个模块",
-      services: "建议服务",
-      detail: "查看详情",
-      guidance: "如何开始",
-      outcomes: "成功指标",
-      close: "关闭",
-    },
-    journey: [
-      {
-        title: "1. 评估机会",
-        body: "识别流程、分支、负载、风险、成本和数据中能快速产生价值的数字化场景。",
-      },
-      {
-        title: "2. 建立基础",
-        body: "现代化关键流程前，先定义连接、身份、安全、备份和监控。",
-      },
-      {
-        title: "3. 迁移与现代化",
-        body: "按优先级分波次推进网站、应用、ERP/SAP、数据库和容器化。",
-      },
-      {
-        title: "4. 激活数据与 AI",
-        body: "集中数据、建立企业知识库，并上线可衡量的 AI 场景。",
-      },
-      {
-        title: "5. 优化与扩展",
-        body: "衡量可用性、成本和效率，持续扩展最能产生价值的解决方案。",
-      },
-    ],
-    resources: [
-      {
-        label: "华为云国际站",
-        href: "https://www.huaweicloud.com/intl/en-us/",
-        description: "国际站公开产品、解决方案和客户案例。",
-      },
-      {
-        label: "全球基础设施",
-        href: "https://www.huaweicloud.com/intl/en-us/about/global-infrastructure.html",
-        description: "全球 Region、AZ、POP 和网络覆盖。",
-      },
-      {
-        label: "拉美 Region 文档",
-        href: "https://support.huaweicloud.com/intl/en-us/productdesc-cc/cc_01_0003.html",
-        description: "按地理区域列出的华为云 Region。",
       },
     ],
   },
