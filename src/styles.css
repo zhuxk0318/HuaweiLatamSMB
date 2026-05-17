@@ -1950,6 +1950,30 @@ a {
   }
 }
 
+.dual-progress-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.dual-progress-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+}
+
+.dual-progress-row small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dual-progress-row span {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 .row-quote-progress-bar-wrap {
   display: flex;
   align-items: center;

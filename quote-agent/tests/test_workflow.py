@@ -876,7 +876,7 @@ def test_row_quote_stages_follow_correct_order(monkeypatch: pytest.MonkeyPatch):
         {"region": "mexico", "language": "es", "customer_notes": ""},
         stage_callback=on_stage,
     )
-    assert stages == ["collect_rows", "map_rows", "price_rows"]
+    assert stages == ["collect_rows", "pipeline_rows"]
 
 
 def test_row_quote_mapping_batch_progress(monkeypatch: pytest.MonkeyPatch):
@@ -925,14 +925,10 @@ def test_row_quote_price_rows_resets_progress(monkeypatch: pytest.MonkeyPatch):
         progress_callback=on_progress,
     )
 
-    price_progress = [p for p in progress_snapshots if p.priced_rows > 0]
-    first_price = price_progress[0]
-    assert first_price.priced_rows == 1
-    assert first_price.stage_processed_rows == 1
-    assert first_price.stage_total_rows == 6
-    last_price = price_progress[-1]
-    assert last_price.priced_rows == 6
-    assert last_price.stage_processed_rows == 6
+    last_progress = progress_snapshots[-1]
+    assert last_progress.priced_rows == 6
+    assert last_progress.mapped_rows == 6
+    assert last_progress.stage_total_rows == 6
 
 
 def test_row_quote_maas_batch_failure_still_advances_progress(monkeypatch: pytest.MonkeyPatch):
@@ -977,3 +973,76 @@ def test_row_quote_summary_unchanged_after_progress_restructure(monkeypatch: pyt
     )
     assert summary.total_rows == 6
     assert summary.quoted_rows + summary.missing_price_rows + summary.manual_review_rows + summary.non_quote_rows == 6
+
+
+def test_pipeline_stage_order(monkeypatch: pytest.MonkeyPatch):
+    stages: list[str] = []
+    def on_stage(stage: str):
+        stages.append(stage)
+
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None):
+        if callable(mapping_progress_callback):
+            mapping_progress_callback(len(rows), len(rows))
+        return {}
+
+    monkeypatch.setattr("app.row_quote_workflow._maas_map_rows", fake_maas)
+    annotate_row_quote_workbook(
+        {"filename": "test.xlsx", "content": _make_simple_workbook_rows(9)},
+        {"region": "mexico", "language": "es", "customer_notes": ""},
+        stage_callback=on_stage,
+    )
+    assert stages == ["collect_rows", "pipeline_rows"]
+
+
+def test_pipeline_dual_progress(monkeypatch: pytest.MonkeyPatch):
+    progress_snapshots: list[RowQuoteProgress] = []
+
+    def on_progress(progress: RowQuoteProgress):
+        progress_snapshots.append(progress)
+
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None):
+        if callable(mapping_progress_callback):
+            mapping_progress_callback(len(rows), len(rows))
+        return {}
+
+    monkeypatch.setattr("app.row_quote_workflow._maas_map_rows", fake_maas)
+    annotate_row_quote_workbook(
+        {"filename": "test.xlsx", "content": _make_simple_workbook_rows(9)},
+        {"region": "mexico", "language": "es", "customer_notes": ""},
+        progress_callback=on_progress,
+    )
+
+    last = progress_snapshots[-1]
+    assert last.mapped_rows == 9
+    assert last.priced_rows == 9
+    assert last.total_rows == 9
+
+
+def test_pipeline_batch_failure_uses_fallback(monkeypatch: pytest.MonkeyPatch):
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None):
+        if callable(mapping_progress_callback):
+            mapping_progress_callback(len(rows), len(rows))
+        return {}
+
+    monkeypatch.setattr("app.row_quote_workflow._maas_map_rows", fake_maas)
+    workbook, summary = annotate_row_quote_workbook(
+        {"filename": "test.xlsx", "content": _make_simple_workbook_rows(6)},
+        {"region": "mexico", "language": "es", "customer_notes": ""},
+    )
+    assert summary.total_rows == 6
+    assert summary.quoted_rows + summary.missing_price_rows + summary.manual_review_rows + summary.non_quote_rows == 6
+
+
+def test_pipeline_summary_matches_serial(monkeypatch: pytest.MonkeyPatch):
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None):
+        if callable(mapping_progress_callback):
+            mapping_progress_callback(len(rows), len(rows))
+        return {}
+
+    monkeypatch.setattr("app.row_quote_workflow._maas_map_rows", fake_maas)
+    workbook, summary = annotate_row_quote_workbook(
+        {"filename": "test.xlsx", "content": _make_simple_workbook_rows(9)},
+        {"region": "mexico", "language": "es", "customer_notes": ""},
+    )
+    assert summary.total_rows == 9
+    assert summary.quoted_rows + summary.missing_price_rows + summary.manual_review_rows + summary.non_quote_rows == 9

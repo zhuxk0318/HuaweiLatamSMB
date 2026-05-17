@@ -184,6 +184,9 @@ function stageLabel(stage?: string | null) {
   if (stage === "collect_rows") {
     return "Collect Rows";
   }
+  if (stage === "pipeline_rows") {
+    return "Pipeline";
+  }
   if (stage === "map_rows") {
     return "Map Rows";
   }
@@ -197,13 +200,6 @@ function stageLabel(stage?: string | null) {
     return "Completed";
   }
   return stage;
-}
-
-function progressLabel(stage: string | null | undefined, t: Record<string, string>) {
-  if (stage === "map_rows") {
-    return t.progressLabelMapRows;
-  }
-  return t.progressLabelPriceRows;
 }
 
 export function FlexibleQuoteEstimator({ lang }: { lang: Lang }) {
@@ -364,8 +360,6 @@ export function FlexibleQuoteEstimator({ lang }: { lang: Lang }) {
 
   const currentStage = task?.current_stage || (progressBusy ? "collect_rows" : null);
   const prog = task?.progress;
-  const stageProcessed = prog?.stage_processed_rows ?? 0;
-  const stageTotal = prog?.stage_total_rows ?? 0;
 
   return (
     <section className="pricing-section">
@@ -485,38 +479,40 @@ export function FlexibleQuoteEstimator({ lang }: { lang: Lang }) {
               <small>{t.file}</small>
               <strong>{file?.name || "-"}</strong>
             </span>
-            <span>
-              <small>{progressLabel(currentStage, t)}</small>
-              <strong>
-                {prog
-                  ? stageTotal > 0
-                    ? `${stageProcessed}/${stageTotal}`
-                    : "0/—"
-                  : "-"}
-              </strong>
-            </span>
           </div>
           {prog ? (
-            stageTotal > 0 ? (
+            <div className="dual-progress-bars">
+              <div className="dual-progress-row">
+                <small>{t.progressLabelMapRows}</small>
+                <span>{prog.total_rows > 0 ? `${prog.mapped_rows}/${prog.total_rows}` : "0/—"}</span>
+              </div>
               <div className="row-quote-progress-bar-wrap">
                 <div className="row-quote-progress-bar">
                   <div
                     className="row-quote-progress-fill"
-                    style={{ width: `${Math.round((stageProcessed / stageTotal) * 100)}%` }}
+                    style={{ width: prog.total_rows > 0 ? `${Math.round((prog.mapped_rows / prog.total_rows) * 100)}%` : "0%" }}
                   />
                 </div>
                 <span className="row-quote-progress-label">
-                  {stageProcessed}/{stageTotal} ({Math.round((stageProcessed / stageTotal) * 100)}%)
+                  {prog.total_rows > 0 ? `${prog.mapped_rows}/${prog.total_rows} (${Math.round((prog.mapped_rows / prog.total_rows) * 100)}%)` : "0/—"}
                 </span>
               </div>
-            ) : (
+              <div className="dual-progress-row">
+                <small>{t.progressLabelPriceRows}</small>
+                <span>{prog.total_rows > 0 ? `${prog.priced_rows}/${prog.total_rows}` : "0/—"}</span>
+              </div>
               <div className="row-quote-progress-bar-wrap">
                 <div className="row-quote-progress-bar">
-                  <div className="row-quote-progress-fill" style={{ width: "0%" }} />
+                  <div
+                    className="row-quote-progress-fill"
+                    style={{ width: prog.total_rows > 0 ? `${Math.round((prog.priced_rows / prog.total_rows) * 100)}%` : "0%" }}
+                  />
                 </div>
-                <span className="row-quote-progress-label">0/—</span>
+                <span className="row-quote-progress-label">
+                  {prog.total_rows > 0 ? `${prog.priced_rows}/${prog.total_rows} (${Math.round((prog.priced_rows / prog.total_rows) * 100)}%)` : "0/—"}
+                </span>
               </div>
-            )
+            </div>
           ) : null}
           <div className="flexible-progress-list">
             <div className={`flexible-progress-step status-${previewState === "failed" ? "failed" : previewState === "succeeded" ? "completed" : progressBusy ? "running" : "skipped"}`}>

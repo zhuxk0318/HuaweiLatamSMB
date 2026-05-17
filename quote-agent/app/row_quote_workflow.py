@@ -4,8 +4,10 @@ import json
 import logging
 import os
 import re
+import threading
 import unicodedata
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any
@@ -21,6 +23,19 @@ from app.models import PriceComponent, QuoteWorkbook, RowQuoteProgress, RowQuote
 from app.pricebook import HOURS_PER_MONTH, load_pricebook, pick_ecs_match
 
 logger = logging.getLogger(__name__)
+
+# Concurrency configuration
+ROW_QUOTE_MAAS_BATCH_SIZE = int(os.getenv("ROW_QUOTE_MAAS_BATCH_SIZE", "3"))
+ROW_QUOTE_MAAS_CONCURRENCY = int(os.getenv("ROW_QUOTE_MAAS_CONCURRENCY", "6"))
+ROW_QUOTE_MAAS_GLOBAL_CONCURRENCY = int(os.getenv("ROW_QUOTE_MAAS_GLOBAL_CONCURRENCY", "12"))
+ROW_QUOTE_MAAS_TIMEOUT_SECONDS = int(os.getenv("ROW_QUOTE_MAAS_TIMEOUT_SECONDS", "120"))
+ROW_QUOTE_MAAS_MAX_RETRIES = int(os.getenv("ROW_QUOTE_MAAS_MAX_RETRIES", "1"))
+
+# Clamp per-task concurrency to global limit
+ROW_QUOTE_MAAS_CONCURRENCY = min(ROW_QUOTE_MAAS_CONCURRENCY, ROW_QUOTE_MAAS_GLOBAL_CONCURRENCY)
+
+# Process-level semaphore: limits total concurrent MaaS requests across all tasks
+_maas_global_semaphore = threading.BoundedSemaphore(ROW_QUOTE_MAAS_GLOBAL_CONCURRENCY)
 
 ROW_QUOTE_COLUMNS = [
     "华为云产品名",
@@ -608,6 +623,72 @@ def _has_strong_local_product_signal(row: RowCandidate, anchor_product: str) -> 
     return bool(local_product and local_product != anchor_product)
 
 
+@dataclass
+class AnchorPlan:
+    group_anchor: dict[str, str] = field(default_factory=dict)
+    row_dependencies: dict[str, tuple[str, ...]] = field(default_factory=dict)
+
+
+def build_anchor_plan(rows: list[RowCandidate]) -> AnchorPlan:
+    plan = AnchorPlan()
+    grouped_rows: dict[str, list[RowCandidate]] = {}
+    for row in rows:
+        for group_key in row.merged_group_keys:
+            grouped_rows.setdefault(group_key, []).append(row)
+    for group_key, members in grouped_rows.items():
+        anchor_row = next((row for row in members if row.cells and not _looks_like_header_or_group(row)), None)
+        if anchor_row is None:
+            continue
+        plan.group_anchor[group_key] = anchor_row.row_id
+        for row in members:
+            if row.row_id != anchor_row.row_id:
+                deps = plan.row_dependencies.get(row.row_id, ())
+                if anchor_row.row_id not in deps:
+                    plan.row_dependencies[row.row_id] = deps + (anchor_row.row_id,)
+    return plan
+
+
+def resolve_final_mapping(
+    row: RowCandidate,
+    raw_mapping: RowMapping | None,
+    raw_mappings: dict[str, RowMapping],
+    anchor_plan: AnchorPlan,
+) -> RowMapping | None:
+    if raw_mapping is None:
+        return None
+    deps = anchor_plan.row_dependencies.get(row.row_id, ())
+    for dep_id in deps:
+        if dep_id not in raw_mappings:
+            return None
+    if not deps:
+        return _apply_product_priority(row, raw_mapping)
+    anchor_id = deps[0]
+    anchor_mapping = raw_mappings.get(anchor_id)
+    if (
+        not anchor_mapping
+        or not anchor_mapping.is_quote_row
+        or not anchor_mapping.huawei_product
+        or anchor_mapping.confidence < 0.75
+    ):
+        return _apply_product_priority(row, raw_mapping)
+    if _has_strong_local_product_signal(row, anchor_mapping.huawei_product):
+        return _apply_product_priority(row, raw_mapping)
+    if raw_mapping.huawei_product and raw_mapping.confidence >= 0.75:
+        return _apply_product_priority(row, raw_mapping)
+    if raw_mapping.huawei_product == anchor_mapping.huawei_product:
+        return _apply_product_priority(row, raw_mapping)
+    inherited = RowMapping(
+        row_id=raw_mapping.row_id,
+        is_quote_row=raw_mapping.is_quote_row,
+        huawei_product=anchor_mapping.huawei_product,
+        huawei_spec=raw_mapping.huawei_spec,
+        quantity=raw_mapping.quantity,
+        rationale=f"{raw_mapping.rationale} Inherited product classification from merged-row anchor {anchor_id}.".strip(),
+        confidence=max(raw_mapping.confidence, anchor_mapping.confidence),
+    )
+    return _apply_product_priority(row, inherited)
+
+
 def _apply_anchor_inheritance(rows: list[RowCandidate], mappings: dict[str, RowMapping]) -> dict[str, RowMapping]:
     if not mappings:
         return mappings
@@ -711,17 +792,31 @@ def _maas_map_rows(rows: list[RowCandidate], quote_context: dict[str, Any], mapp
     if not api_key or not base_url or not model:
         return {}
 
-    BATCH_SIZE = 3
-    MAX_RETRIES = 1
+    BATCH_SIZE = ROW_QUOTE_MAAS_BATCH_SIZE
+    MAX_RETRIES = ROW_QUOTE_MAAS_MAX_RETRIES
+    TIMEOUT = ROW_QUOTE_MAAS_TIMEOUT_SECONDS
+    CONCURRENCY = ROW_QUOTE_MAAS_CONCURRENCY
     SUPPORTED_PRODUCTS = [
         "ECS", "EVS", "CBR", "EIP", "CCE", "CCI", "SFS Turbo", "NAT Gateway", "VPN",
         "Direct Connect as a Service", "RDS", "DDS", "DWS", "OBS", "ELB", "WAF",
         "HSS", "VPC", "Workspace", "DRS", "CSS", "DLI", "ModelArts", "FunctionGraph", "GaussDB",
     ]
 
-    mapped: dict[str, RowMapping] = {}
-    for start in range(0, len(rows), BATCH_SIZE):
-        batch = rows[start : start + BATCH_SIZE]
+    SYSTEM_PROMPT = (
+        "Return JSON only with rows[]. For each input row, classify is_quote_row. "
+        "For quote rows provide huawei_product, huawei_spec, quantity if visible, "
+        "rationale, confidence. Do not calculate prices. Mark empty/title/group rows "
+        "as is_quote_row=false. Serverless container pricing rows must map to CCI, not CCE. "
+        "Rows containing Serverless, Pod-CPU, Pod-Memory, vCPU-second, GiB-second, 核/秒, 内存/秒 "
+        "should map to CCI. CCE is for cluster management pricing such as Cluster Type, "
+        "Cluster Scale, Master Nodes, 50/200/1000/2000 nodes, or 3 Masters."
+    )
+
+    batches: list[tuple[int, list[RowCandidate]]] = [
+        (start, rows[start : start + BATCH_SIZE]) for start in range(0, len(rows), BATCH_SIZE)
+    ]
+
+    def _run_batch(start: int, batch: list[RowCandidate]) -> tuple[int, dict[str, RowMapping]]:
         batch_rows = {
             row.row_id: {
                 "sheet": row.sheet,
@@ -750,80 +845,77 @@ def _maas_map_rows(rows: list[RowCandidate], quote_context: dict[str, Any], mapp
         }
         _debug_log("maas_request", model=model, batch_start=start, prompt=prompt)
         payload = None
-        for attempt in range(1 + MAX_RETRIES):
-            try:
-                with httpx.Client(timeout=120) as client:
-                    response = client.post(
-                        f"{base_url.rstrip('/')}/chat/completions",
-                        headers={"Authorization": f"Bearer {api_key}"},
-                        json={
-                            "model": model,
-                            "temperature": 0.1,
-                            "response_format": {"type": "json_object"},
-                            "messages": [
-                                {
-                                    "role": "system",
-                                    "content": (
-                                        "Return JSON only with rows[]. For each input row, classify is_quote_row. "
-                                        "For quote rows provide huawei_product, huawei_spec, quantity if visible, "
-                                        "rationale, confidence. Do not calculate prices. Mark empty/title/group rows "
-                                        "as is_quote_row=false. Serverless container pricing rows must map to CCI, not CCE. "
-                                        "Rows containing Serverless, Pod-CPU, Pod-Memory, vCPU-second, GiB-second, 核/秒, 内存/秒 "
-                                        "should map to CCI. CCE is for cluster management pricing such as Cluster Type, "
-                                        "Cluster Scale, Master Nodes, 50/200/1000/2000 nodes, or 3 Masters."
-                                    ),
-                                },
-                                {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-                            ],
-                        },
-                    )
-                    response.raise_for_status()
-                    content = response.json()["choices"][0]["message"]["content"]
-                    _debug_log("maas_response_raw", model=model, batch_start=start, attempt=attempt + 1, response=content)
-                    payload = json.loads(content)
-                    break
-            except Exception as exc:
-                logger.warning("Row quote MaaS batch mapping attempt %d failed: %s", attempt + 1, exc)
-                _debug_log("maas_response_error", model=model, batch_start=start, attempt=attempt + 1, error=str(exc))
-        if not payload:
-            if callable(mapping_progress_callback):
-                mapping_progress_callback(min(start + len(batch), len(rows)), len(rows))
-            continue
-        for item in payload.get("rows", []):
-            row_id = str(item.get("row_id") or "")
-            if not row_id:
-                continue
-            product = item.get("huawei_product") or item.get("product_name")
-            product = _normalize_product_name(str(product)) if product else None
-            source_row = batch_rows.get(row_id)
-            row_text = " ".join(source_row["cells"].values()) if source_row else ""
-            mapping = RowMapping(
-                row_id=row_id,
-                is_quote_row=bool(item.get("is_quote_row")),
-                huawei_product=product,
-                huawei_spec=_normalize_mapping_spec(product, str(item.get("huawei_spec") or item.get("spec") or "") or None, row_text),
-                quantity=_to_float(item.get("quantity")),
-                rationale=str(item.get("rationale") or item.get("mapping_note") or ""),
-                confidence=max(0, min(1, _to_float(item.get("confidence")) or 0)),
-            )
-            if source_row:
-                mapping = _apply_product_priority(
-                    RowCandidate(
-                        row_id=row_id,
-                        sheet=str(source_row["sheet"]),
-                        row_number=int(source_row["row_number"]),
-                        cells=dict(source_row["cells"]),
-                        local_cells=dict(source_row["local_cells"]),
-                        inherited_cells=dict(source_row["inherited_cells"]),
-                        header_context=list(source_row["header_context"]),
-                        merged_group_keys=tuple(source_row["merged_group_keys"]),
-                    ),
-                    mapping,
+        with _maas_global_semaphore:
+            for attempt in range(1 + MAX_RETRIES):
+                try:
+                    with httpx.Client(timeout=TIMEOUT) as client:
+                        response = client.post(
+                            f"{base_url.rstrip('/')}/chat/completions",
+                            headers={"Authorization": f"Bearer {api_key}"},
+                            json={
+                                "model": model,
+                                "temperature": 0.1,
+                                "response_format": {"type": "json_object"},
+                                "messages": [
+                                    {"role": "system", "content": SYSTEM_PROMPT},
+                                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                                ],
+                            },
+                        )
+                        response.raise_for_status()
+                        content = response.json()["choices"][0]["message"]["content"]
+                        _debug_log("maas_response_raw", model=model, batch_start=start, attempt=attempt + 1, response=content)
+                        payload = json.loads(content)
+                        break
+                except Exception as exc:
+                    logger.warning("Row quote MaaS batch mapping attempt %d failed: %s", attempt + 1, exc)
+                    _debug_log("maas_response_error", model=model, batch_start=start, attempt=attempt + 1, error=str(exc))
+
+        result: dict[str, RowMapping] = {}
+        if payload:
+            for item in payload.get("rows", []):
+                row_id = str(item.get("row_id") or "")
+                if not row_id:
+                    continue
+                product = item.get("huawei_product") or item.get("product_name")
+                product = _normalize_product_name(str(product)) if product else None
+                source_row = batch_rows.get(row_id)
+                row_text = " ".join(source_row["cells"].values()) if source_row else ""
+                mapping = RowMapping(
+                    row_id=row_id,
+                    is_quote_row=bool(item.get("is_quote_row")),
+                    huawei_product=product,
+                    huawei_spec=_normalize_mapping_spec(product, str(item.get("huawei_spec") or item.get("spec") or "") or None, row_text),
+                    quantity=_to_float(item.get("quantity")),
+                    rationale=str(item.get("rationale") or item.get("mapping_note") or ""),
+                    confidence=max(0, min(1, _to_float(item.get("confidence")) or 0)),
                 )
-            mapped[row_id] = mapping
-            _debug_log("maas_mapping", row_id=row_id, mapping=mapping.__dict__, source_row=source_row)
-        if callable(mapping_progress_callback):
-            mapping_progress_callback(min(start + len(batch), len(rows)), len(rows))
+                if source_row:
+                    mapping = _apply_product_priority(
+                        RowCandidate(
+                            row_id=row_id,
+                            sheet=str(source_row["sheet"]),
+                            row_number=int(source_row["row_number"]),
+                            cells=dict(source_row["cells"]),
+                            local_cells=dict(source_row["local_cells"]),
+                            inherited_cells=dict(source_row["inherited_cells"]),
+                            header_context=list(source_row["header_context"]),
+                            merged_group_keys=tuple(source_row["merged_group_keys"]),
+                        ),
+                        mapping,
+                    )
+                result[row_id] = mapping
+                _debug_log("maas_mapping", row_id=row_id, mapping=mapping.__dict__, source_row=source_row)
+        return start, result
+
+    mapped: dict[str, RowMapping] = {}
+    with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
+        futures = {executor.submit(_run_batch, start, batch): start for start, batch in batches}
+        for future in as_completed(futures):
+            start, batch_mappings = future.result()
+            mapped.update(batch_mappings)
+            if callable(mapping_progress_callback):
+                mapping_progress_callback(min(start + BATCH_SIZE, len(rows)), len(rows))
     return mapped
 
 
@@ -1317,9 +1409,10 @@ def annotate_row_quote_workbook(upload: dict[str, Any], quote_context: dict[str,
         quote_context=quote_context,
     )
     total_rows = len(rows)
+    anchor_plan = build_anchor_plan(rows)
 
     if callable(stage_callback):
-        stage_callback("map_rows")
+        stage_callback("pipeline_rows")
     if callable(progress_callback):
         progress_callback(RowQuoteProgress(
             total_rows=total_rows,
@@ -1329,69 +1422,101 @@ def annotate_row_quote_workbook(upload: dict[str, Any], quote_context: dict[str,
             stage_total_rows=total_rows,
         ))
 
-    def on_mapping_progress(mapped_count: int, total: int) -> None:
-        if callable(progress_callback):
-            progress_callback(RowQuoteProgress(
-                total_rows=total_rows,
-                mapped_rows=mapped_count,
-                priced_rows=0,
-                stage_processed_rows=mapped_count,
-                stage_total_rows=total,
-            ))
-
-    llm_mappings = _maas_map_rows(rows, quote_context, mapping_progress_callback=on_mapping_progress)
-    llm_mappings = _apply_anchor_inheritance(rows, llm_mappings)
-
-    if callable(stage_callback):
-        stage_callback("price_rows")
-    if callable(progress_callback):
-        progress_callback(RowQuoteProgress(
-            total_rows=total_rows,
-            mapped_rows=total_rows,
-            priced_rows=0,
-            stage_processed_rows=0,
-            stage_total_rows=total_rows,
-        ))
-
-    results: list[PriceResult] = []
-    rows_by_id = {row.row_id: row for row in rows}
-
     for ws in workbook.worksheets:
         start_col = original_widths[ws.title] + 1
         _write_quote_headers(ws, start_col)
 
+    raw_mappings: dict[str, RowMapping] = {}
+    final_mappings: dict[str, RowMapping] = {}
+    results: list[PriceResult] = []
+    rows_by_id = {row.row_id: row for row in rows}
+    priced_row_ids: set[str] = set()
+    mapped_count = 0
+    priced_count = 0
+
+    def _emit_progress() -> None:
+        if not callable(progress_callback):
+            return
+        quoted = sum(1 for r in results if r.status == QUOTE_STATUS_QUOTED)
+        manual = sum(1 for r in results if r.status == QUOTE_STATUS_MANUAL)
+        missing = sum(1 for r in results if r.status == QUOTE_STATUS_MISSING_PRICE)
+        non_quote = sum(1 for r in results if r.status == QUOTE_STATUS_NON_QUOTE)
+        progress_callback(RowQuoteProgress(
+            total_rows=total_rows,
+            processed_rows=priced_count,
+            quoted_rows=quoted,
+            manual_review_rows=manual,
+            missing_price_rows=missing,
+            unmatched_rows=0,
+            non_quote_rows=non_quote,
+            mapped_rows=mapped_count,
+            priced_rows=priced_count,
+            stage_processed_rows=priced_count,
+            stage_total_rows=total_rows,
+        ))
+
+    def _try_price_ready_rows() -> None:
+        nonlocal priced_count
+        for row in rows:
+            if row.row_id in priced_row_ids:
+                continue
+            if row.row_id not in final_mappings:
+                raw = raw_mappings.get(row.row_id)
+                if raw is None:
+                    continue
+                resolved = resolve_final_mapping(row, raw, raw_mappings, anchor_plan)
+                if resolved is None:
+                    continue
+                final_mappings[row.row_id] = resolved
+            mapping = final_mappings[row.row_id]
+            if not raw_mappings.get(row.row_id):
+                fallback = _fallback_mapping(row)
+                final_mappings[row.row_id] = fallback
+                mapping = fallback
+            if raw_mappings.get(row.row_id) and mapping.is_quote_row:
+                fallback = _fallback_mapping(row)
+                if not mapping.quantity and fallback.quantity:
+                    mapping = RowMapping(
+                        row_id=mapping.row_id, is_quote_row=mapping.is_quote_row,
+                        huawei_product=mapping.huawei_product, huawei_spec=mapping.huawei_spec,
+                        quantity=fallback.quantity, rationale=mapping.rationale, confidence=mapping.confidence,
+                    )
+                if not mapping.huawei_product:
+                    mapping = RowMapping(
+                        row_id=mapping.row_id, is_quote_row=mapping.is_quote_row,
+                        huawei_product=fallback.huawei_product, huawei_spec=mapping.huawei_spec,
+                        quantity=mapping.quantity, rationale=mapping.rationale, confidence=mapping.confidence,
+                    )
+                if not mapping.huawei_spec:
+                    mapping = RowMapping(
+                        row_id=mapping.row_id, is_quote_row=mapping.is_quote_row,
+                        huawei_product=mapping.huawei_product, huawei_spec=fallback.huawei_spec,
+                        quantity=mapping.quantity, rationale=mapping.rationale, confidence=mapping.confidence,
+                    )
+                final_mappings[row.row_id] = mapping
+            result = _price_row(mapping, rows_by_id[row.row_id], quote_context)
+            results.append(result)
+            ws = workbook[row.sheet]
+            _write_price_result(ws, row.row_number, original_widths[row.sheet] + 1, result)
+            priced_row_ids.add(row.row_id)
+            priced_count = len(priced_row_ids)
+        _emit_progress()
+
+    def on_mapping_progress(new_mapped_count: int, total: int) -> None:
+        nonlocal mapped_count
+        mapped_count = new_mapped_count
+        _try_price_ready_rows()
+
+    llm_mappings = _maas_map_rows(rows, quote_context, mapping_progress_callback=on_mapping_progress)
+    raw_mappings.update(llm_mappings)
+    mapped_count = len(raw_mappings)
+
     for row in rows:
-        mapping = llm_mappings.get(row.row_id) or _fallback_mapping(row)
-        if llm_mappings.get(row.row_id) and mapping.is_quote_row:
-            fallback = _fallback_mapping(row)
-            if not mapping.quantity and fallback.quantity:
-                mapping.quantity = fallback.quantity
-            if not mapping.huawei_product:
-                mapping.huawei_product = fallback.huawei_product
-            if not mapping.huawei_spec:
-                mapping.huawei_spec = fallback.huawei_spec
-        result = _price_row(mapping, rows_by_id[row.row_id], quote_context)
-        results.append(result)
-        ws = workbook[row.sheet]
-        _write_price_result(ws, row.row_number, original_widths[row.sheet] + 1, result)
-        if callable(progress_callback):
-            quoted = sum(1 for r in results if r.status == QUOTE_STATUS_QUOTED)
-            manual = sum(1 for r in results if r.status == QUOTE_STATUS_MANUAL)
-            missing = sum(1 for r in results if r.status == QUOTE_STATUS_MISSING_PRICE)
-            non_quote = sum(1 for r in results if r.status == QUOTE_STATUS_NON_QUOTE)
-            progress_callback(RowQuoteProgress(
-                total_rows=total_rows,
-                processed_rows=len(results),
-                quoted_rows=quoted,
-                manual_review_rows=manual,
-                missing_price_rows=missing,
-                unmatched_rows=0,
-                non_quote_rows=non_quote,
-                mapped_rows=total_rows,
-                priced_rows=len(results),
-                stage_processed_rows=len(results),
-                stage_total_rows=total_rows,
-            ))
+        if row.row_id not in raw_mappings:
+            raw_mappings[row.row_id] = _fallback_mapping(row)
+    mapped_count = len(raw_mappings)
+
+    _try_price_ready_rows()
 
     output = BytesIO()
     workbook.save(output)
