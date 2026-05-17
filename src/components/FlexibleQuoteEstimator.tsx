@@ -92,6 +92,8 @@ const uiCopy = {
     ri: "RI 1Y",
     progressLabelMapRows: "Mapeadas/Total",
     progressLabelPriceRows: "Cotizadas/Total",
+    cancel: "Cancelar",
+    cancelFailed: "No se pudo cancelar la tarea.",
   },
   en: {
     title: "Flexible Quote",
@@ -129,6 +131,8 @@ const uiCopy = {
     ri: "RI 1Y",
     progressLabelMapRows: "Mapped/Total",
     progressLabelPriceRows: "Priced/Total",
+    cancel: "Cancel",
+    cancelFailed: "Failed to cancel the task.",
   },
 } satisfies Record<string, Record<string, string>>;
 
@@ -358,6 +362,20 @@ export function FlexibleQuoteEstimator({ lang }: { lang: Lang }) {
     }
   }
 
+  async function runCancel() {
+    if (!taskId) {
+      return;
+    }
+    try {
+      const response = await fetch(`${QUOTE_API_BASE_URL}/api/quotes/flexible/annotate/tasks/${taskId}/cancel`, { method: "POST" });
+      if (!response.ok) {
+        throw new Error(await getErrorDetail(response, t.cancelFailed));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t.cancelFailed);
+    }
+  }
+
   const currentStage = task?.current_stage || (progressBusy ? "collect_rows" : null);
   const prog = task?.progress;
 
@@ -383,6 +401,11 @@ export function FlexibleQuoteEstimator({ lang }: { lang: Lang }) {
             <Download size={18} />
             {t.export}
           </button>
+          {progressBusy && (
+            <button type="button" className="upload-button secondary" onClick={runCancel}>
+              {t.cancel}
+            </button>
+          )}
         </div>
       </div>
 

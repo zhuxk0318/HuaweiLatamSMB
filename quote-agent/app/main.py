@@ -23,7 +23,7 @@ from app.models import (
     RowQuoteTaskCreatedResponse,
     RowQuoteTaskResponse,
 )
-from app.row_quote_tasks import create_annotation_task, get_annotation_task, get_annotation_workbook
+from app.row_quote_tasks import cancel_annotation_task, create_annotation_task, get_annotation_task, get_annotation_workbook
 from app.row_quote_workflow import _safe_ascii_filename
 from app.workflow import build_preview_response, export_graph, preview_graph
 
@@ -169,6 +169,11 @@ def export_flexible_annotate_task(task_id: str) -> Response:
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{workbook.filename}"'},
     )
+
+
+@app.post("/api/quotes/flexible/annotate/tasks/{task_id}/cancel", response_model=RowQuoteTaskResponse)
+def cancel_flexible_annotate_task(task_id: str) -> RowQuoteTaskResponse:
+    return cancel_annotation_task(task_id)
 
 
 @app.post("/api/quotes/flexible/preview/tasks", response_model=FlexiblePreviewTaskCreatedResponse)
