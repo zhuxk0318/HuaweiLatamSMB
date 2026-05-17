@@ -1,49 +1,8 @@
-{
-  "generatedAt": "2026-05-09T02:52:28.458Z",
-  "seeds": [
-    "https://www.huaweicloud.com/intl/en-us/",
-    "https://e.huawei.com/en/"
-  ],
-  "limits": {
-    "pageLimitPerSite": 2,
-    "imageLimit": 24,
-    "maxBytes": 8388608
-  },
-  "images": [
-    {
-      "sourceSite": "huaweicloud.com",
-      "sourceUrl": "https://www.huaweicloud.com/intl/en-us/",
-      "originalUrl": "https://portal.hc-cdn.com/cpage-pep-home-page/2.0.30/components/global-site-3d/images/earth_bg.png",
-      "localPath": "/assets/huawei/official-cache/earth-bg-da7f9eef0a74951f.png",
-      "fileSize": 66227,
-      "alt": ""
-    }
-  ],
-  "pages": [
-    {
-      "sourceSite": "huaweicloud.com",
-      "sourceUrl": "https://www.huaweicloud.com/intl/en-us/",
-      "status": "ok"
-    },
-    {
-      "sourceSite": "huaweicloud.com",
-      "sourceUrl": "https://www.huaweicloud.com/intl/zh-cn",
-      "status": "ok"
-    }
-  ],
-  "failures": [
-    {
-      "sourceSite": "huaweicloud.com",
-      "sourceUrl": "https://www.huaweicloud.com/intl/en-us/",
-      "originalUrl": "https://portal-intl.huaweicloud.com/stats/pip.gif",
-      "stage": "image",
-      "error": "HTTP 405"
-    },
-    {
-      "sourceSite": "e.huawei.com",
-      "sourceUrl": "https://e.huawei.com/en/",
-      "stage": "page",
-      "error": "HTTP 403"
-    }
-  ]
-}
+[
+  {
+    "sourceUrl": "https://e.huawei.com/mx/products/wlan",
+    "originalUrl": "https://e.huawei.com/marketingcloud/pep/asset/20000001/products/wlan/wlan-banner-pc2.jpg",
+    "localPath": "/assets/huawei/official-cache/enterprise-wlan-banner.jpg",
+    "alt": "WLAN"
+  }
+]

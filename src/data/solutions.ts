@@ -51,6 +51,18 @@ export function textFor(lang: Lang, copy: LocalizedPair) {
   return copy.en;
 }
 
+export type SolutionEntryCard =
+  | { kind: "internal"; entry: SolutionEntry }
+  | {
+      kind: "external";
+      id: string;
+      title: LocalizedPair;
+      summary: LocalizedPair;
+      tags: string[];
+      heroImage: string;
+      externalUrls: { es: string; en: string };
+    };
+
 const link = (label: string, url: string): SkillLink => ({ label, url });
 
 export const solutionEntries: SolutionEntry[] = [
@@ -95,6 +107,28 @@ export const solutionEntries: SolutionEntry[] = [
     tags: ["Resilience", "Security", "Simpler IT"],
     heroImage: "/assets/huawei/flexus.jpg",
     scenarioIds: ["sap-erp-on-cloud", "backup-dr-security", "workspace-vmware-migration"],
+  },
+];
+
+export const solutionEntryCards: SolutionEntryCard[] = [
+  ...solutionEntries.map((entry) => ({ kind: "internal" as const, entry })),
+  {
+    kind: "external",
+    id: "enterprise-connectivity",
+    title: {
+      es: "Conectividad para empresas y sector público",
+      en: "Connectivity for Enterprise and Public Sector",
+    },
+    summary: {
+      es: "Nueva entrada para escenarios de conectividad Huawei. En esta primera fase abre directamente la solución oficial de WLAN.",
+      en: "New entry for Huawei connectivity scenarios. In this first phase it opens the official WLAN solution directly.",
+    },
+    tags: ["WLAN", "Wi-Fi", "Enterprise Network"],
+    heroImage: "/assets/huawei/official-cache/enterprise-wlan-banner.jpg",
+    externalUrls: {
+      es: "https://e.huawei.com/mx/products/wlan",
+      en: "https://e.huawei.com/sg/products/wlan",
+    },
   },
 ];
 

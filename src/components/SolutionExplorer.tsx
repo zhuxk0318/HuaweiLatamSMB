@@ -3,6 +3,7 @@ import { trackClick } from "../analytics";
 import type { Lang } from "../data/i18n";
 import {
   solutionEntries,
+  solutionEntryCards,
   solutionScenarioMap,
   textFor,
   type SolutionEntry,
@@ -25,6 +26,8 @@ const labels = {
     viewSolution: "Ver solución",
     viewSkill: "Ver demo / skill",
     quickIntegration: "Integración rápida",
+    openOfficial: "Abrir solución oficial",
+    externalBadge: "Enlace externo",
   },
   en: {
     kicker: "Solution Playbook",
@@ -35,6 +38,8 @@ const labels = {
     viewSolution: "View solution",
     viewSkill: "View demo / skill",
     quickIntegration: "Quick integration",
+    openOfficial: "Open official solution",
+    externalBadge: "External link",
   },
 } satisfies Record<
   Lang,
@@ -46,6 +51,8 @@ const labels = {
     viewSolution: string;
     viewSkill: string;
     quickIntegration: string;
+    openOfficial: string;
+    externalBadge: string;
   }
 >;
 
@@ -161,33 +168,73 @@ export function SolutionExplorer({ lang, initialEntryId }: SolutionExplorerProps
       </section>
 
       <section className="playbook-entry-grid">
-        {solutionEntries.map((entry) => {
-          const active = entry.id === activeEntry.id;
+        {solutionEntryCards.map((card) => {
+          if (card.kind === "internal") {
+            const entry = card.entry;
+            const active = entry.id === activeEntry.id;
+            return (
+              <a
+                className={active ? "playbook-entry-card active" : "playbook-entry-card"}
+                href={`#/solutions?entry=${entry.id}`}
+                key={entry.id}
+                onClick={() =>
+                  trackClick({
+                    click_target: "solution_entry_card",
+                    click_section: "solutions_entries",
+                    destination: `#/solutions?entry=${entry.id}`,
+                    entry_id: entry.id,
+                  })
+                }
+              >
+                <img src={entry.heroImage} alt="" loading="lazy" />
+                <span className="playbook-entry-overlay" />
+                <span className="playbook-entry-content">
+                  <strong>{textFor(lang, entry.title)}</strong>
+                  <small>{textFor(lang, entry.summary)}</small>
+                  <span className="tag-row playbook-entry-tags">
+                    {entry.tags.map((tag) => (
+                      <span className="service-tag strong on-dark" key={tag}>
+                        {tag}
+                      </span>
+                    ))}
+                  </span>
+                </span>
+              </a>
+            );
+          }
+          const url = lang === "es" ? card.externalUrls.es : card.externalUrls.en;
           return (
             <a
-              className={active ? "playbook-entry-card active" : "playbook-entry-card"}
-              href={`#/solutions?entry=${entry.id}`}
-              key={entry.id}
+              className="playbook-entry-card playbook-entry-card-external"
+              href={url}
+              key={card.id}
+              target="_blank"
+              rel="noreferrer"
               onClick={() =>
                 trackClick({
-                  click_target: "solution_entry_card",
+                  click_target: "solution_entry_card_external",
                   click_section: "solutions_entries",
-                  destination: `#/solutions?entry=${entry.id}`,
-                  entry_id: entry.id,
+                  destination: url,
+                  entry_id: card.id,
                 })
               }
             >
-              <img src={entry.heroImage} alt="" loading="lazy" />
+              <img src={card.heroImage} alt="" loading="lazy" />
               <span className="playbook-entry-overlay" />
               <span className="playbook-entry-content">
-                <strong>{textFor(lang, entry.title)}</strong>
-                <small>{textFor(lang, entry.summary)}</small>
+                <span className="external-link-badge"><ExternalLink size={12} /> {l.externalBadge}</span>
+                <strong>{textFor(lang, card.title)}</strong>
+                <small>{textFor(lang, card.summary)}</small>
                 <span className="tag-row playbook-entry-tags">
-                  {entry.tags.map((tag) => (
+                  {card.tags.map((tag) => (
                     <span className="service-tag strong on-dark" key={tag}>
                       {tag}
                     </span>
                   ))}
+                </span>
+                <span className="solution-domain-entry-action">
+                  {l.openOfficial}
+                  <ExternalLink size={16} />
                 </span>
               </span>
             </a>

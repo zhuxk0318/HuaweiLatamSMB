@@ -10,7 +10,7 @@ import { SolutionDetailPage } from "./components/SolutionDetailPage";
 import { SolutionExplorer, getValidSolutionEntry } from "./components/SolutionExplorer";
 import { initAnalytics, trackClick, trackPageView } from "./analytics";
 import { copy, type Lang } from "./data/i18n";
-import { solutionEntries, textFor } from "./data/solutions";
+import { solutionEntries, solutionEntryCards, textFor } from "./data/solutions";
 
 type Route = "home" | "estimator" | "solutionsIndex" | "solution";
 
@@ -443,28 +443,60 @@ function HomePage({ lang }: { lang: Lang }) {
           <p>{t.sections.solutionsBody}</p>
         </div>
         <div className="solution-domain-entry-grid">
-          {solutionEntries.map((entry) => {
+          {solutionEntryCards.map((card) => {
+            if (card.kind === "internal") {
+              const entry = card.entry;
+              return (
+                <a
+                  className="solution-domain-entry"
+                  href={`#/solutions?entry=${entry.id}`}
+                  key={entry.id}
+                  onClick={() =>
+                    trackClick({
+                      click_target: "home_solution_entry",
+                      click_section: "home_solution_entries",
+                      destination: `#/solutions?entry=${entry.id}`,
+                      entry_id: entry.id,
+                    })
+                  }
+                >
+                  <img src={entry.heroImage} alt="" loading="lazy" />
+                  <span className="solution-domain-entry-overlay" />
+                  <span className="solution-domain-entry-content">
+                    <strong>{textFor(lang, entry.title)}</strong>
+                    <small>{textFor(lang, entry.summary)}</small>
+                    <span className="solution-domain-entry-action">
+                      {lang === "es" ? "Explorar escenarios" : "Explore scenarios"}
+                      <ArrowRight size={16} />
+                    </span>
+                  </span>
+                </a>
+              );
+            }
+            const url = lang === "es" ? card.externalUrls.es : card.externalUrls.en;
             return (
               <a
-                className="solution-domain-entry"
-                href={`#/solutions?entry=${entry.id}`}
-                key={entry.id}
+                className="solution-domain-entry solution-domain-entry-external"
+                href={url}
+                key={card.id}
+                target="_blank"
+                rel="noreferrer"
                 onClick={() =>
                   trackClick({
-                    click_target: "home_solution_entry",
+                    click_target: "home_solution_entry_external",
                     click_section: "home_solution_entries",
-                    destination: `#/solutions?entry=${entry.id}`,
-                    entry_id: entry.id,
+                    destination: url,
+                    entry_id: card.id,
                   })
                 }
               >
-                <img src={entry.heroImage} alt="" loading="lazy" />
+                <img src={card.heroImage} alt="" loading="lazy" />
                 <span className="solution-domain-entry-overlay" />
                 <span className="solution-domain-entry-content">
-                  <strong>{textFor(lang, entry.title)}</strong>
-                  <small>{textFor(lang, entry.summary)}</small>
+                  <strong>{textFor(lang, card.title)}</strong>
+                  <small>{textFor(lang, card.summary)}</small>
                   <span className="solution-domain-entry-action">
-                    {lang === "es" ? "Explorar escenarios" : "Explore scenarios"}
+                    {lang === "es" ? "Abrir solución oficial" : "Open official solution"}
                     <ArrowRight size={16} />
                   </span>
                 </span>
