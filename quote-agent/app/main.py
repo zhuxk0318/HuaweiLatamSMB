@@ -148,6 +148,8 @@ def create_flexible_annotate_task(
     lang: str = Form(default="en"),
     customer_notes: str = Form(default=""),
 ) -> RowQuoteTaskCreatedResponse:
+    if not customer_notes.strip():
+        raise HTTPException(status_code=422, detail="customer_notes is required. Provide AI quote guidance for the annotation task.")
     upload = _read_single_excel(flexible_file)
     return create_annotation_task(
         upload,

@@ -809,7 +809,8 @@ def _maas_map_rows(rows: list[RowCandidate], quote_context: dict[str, Any], mapp
         "as is_quote_row=false. Serverless container pricing rows must map to CCI, not CCE. "
         "Rows containing Serverless, Pod-CPU, Pod-Memory, vCPU-second, GiB-second, 核/秒, 内存/秒 "
         "should map to CCI. CCE is for cluster management pricing such as Cluster Type, "
-        "Cluster Scale, Master Nodes, 50/200/1000/2000 nodes, or 3 Masters."
+        "Cluster Scale, Master Nodes, 50/200/1000/2000 nodes, or 3 Masters. "
+        "Use quote_context.customer_notes as an explicit instruction from the user when interpreting ambiguous rows and choosing practical Huawei Cloud mappings."
     )
 
     batches: list[tuple[int, list[RowCandidate]]] = [

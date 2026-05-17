@@ -650,7 +650,7 @@ def test_row_quote_annotate_task_exports_original_workbook_with_added_columns(mo
         UploadFile(filename="customer.xlsx", file=BytesIO(make_row_quote_workbook())),
         "mexico",
         "zh",
-        "",
+        "Generate a quote for SMB use.",
     )
 
     final = None
@@ -679,7 +679,7 @@ def test_row_quote_export_sanitizes_unicode_filename(monkeypatch: pytest.MonkeyP
         UploadFile(filename="客户报价.xlsx", file=BytesIO(make_row_quote_workbook())),
         "mexico",
         "zh",
-        "",
+        "Generate a quote for SMB use.",
     )
 
     final = None

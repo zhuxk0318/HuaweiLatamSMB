@@ -1687,6 +1687,85 @@ a {
   grid-column: 1 / -1;
 }
 
+.region-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.region-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 14px 8px;
+  border: 2px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+  min-height: 64px;
+}
+
+.region-card:hover:not(:disabled) {
+  border-color: #c41e3a;
+}
+
+.region-card.selected {
+  border-color: #c41e3a;
+  background: #fef2f2;
+  box-shadow: 0 2px 8px rgba(196, 30, 58, 0.12);
+}
+
+.region-card:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.region-card-country {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+
+.region-card-name {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.ai-guidance-field {
+  margin-bottom: 16px;
+}
+
+.ai-guidance-field label span {
+  display: block;
+  font-weight: 650;
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.ai-guidance-hint {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin: 0 0 6px 0;
+}
+
+.ai-guidance-field textarea {
+  width: 100%;
+  min-height: 80px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--text);
+  resize: vertical;
+  font-family: inherit;
+  font-size: 0.88rem;
+}
+
 .segmented-control {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1711,10 +1790,11 @@ a {
 }
 
 .segmented-control button.active {
-  border-color: rgba(199, 0, 11, 0.48);
+  border-color: #c41e3a;
   background: #ffffff;
   color: var(--ink);
-  box-shadow: inset 3px 0 0 var(--red);
+  box-shadow: inset 3px 0 0 var(--red), 0 2px 8px rgba(196, 30, 58, 0.1);
+  font-weight: 750;
 }
 
 .segmented-control button:hover {
@@ -2347,5 +2427,9 @@ a {
 
   .footer-bottom .footer-law {
     display: none;
+  }
+
+  .region-card-grid {
+    grid-template-columns: 1fr;
   }
 }
