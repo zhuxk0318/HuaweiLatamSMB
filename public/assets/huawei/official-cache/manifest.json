@@ -4,5 +4,17 @@
     "originalUrl": "https://e.huawei.com/marketingcloud/pep/asset/20000001/products/wlan/wlan-banner-pc2.jpg",
     "localPath": "/assets/huawei/official-cache/enterprise-wlan-banner.jpg",
     "alt": "WLAN"
+  },
+  {
+    "sourceUrl": "https://e.huawei.com/en/industries/healthcare/medical-imaging",
+    "originalUrl": "https://e.huawei.com/marketingcloud/pep/asset/2000000101/images/industries/healthcare/medical-imaging/banner-bequoted-1.jpg",
+    "localPath": "/assets/huawei/enterprise-healthcare/medical-imaging-banner.jpg",
+    "alt": "AI-Assisted Medical Imaging"
+  },
+  {
+    "sourceUrl": "https://e.huawei.com/en/industries/healthcare/medical-technology",
+    "originalUrl": "https://e.huawei.com/marketingcloud/pep/asset/2000000101/images/industries/healthcare/medical-technology/medical-technology-banner-bequoted.jpg",
+    "localPath": "/assets/huawei/enterprise-healthcare/digital-pathology-banner.jpg",
+    "alt": "Digital Pathology"
   }
 ]

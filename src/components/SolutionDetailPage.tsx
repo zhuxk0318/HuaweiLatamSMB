@@ -2,6 +2,7 @@ import { ArrowLeft, ArrowRight, ExternalLink, Layers3 } from "lucide-react";
 import { trackClick } from "../analytics";
 import type { Lang } from "../data/i18n";
 import { solutionEntries, solutionScenarioMap, textFor, type LocalizedPair } from "../data/solutions";
+import { HealthcareSolutionPage } from "./HealthcareSolutionPage";
 
 type SolutionDetailPageProps = {
   lang: Lang;
@@ -72,6 +73,10 @@ function BulletSection({ title, items }: { title: string; items: string[] }) {
 export function SolutionDetailPage({ lang, solutionId }: SolutionDetailPageProps) {
   const l = labels[lang];
   const scenario = solutionId ? solutionScenarioMap[solutionId] : undefined;
+
+  if (scenario?.detailVariant === "healthcare" && solutionId) {
+    return <HealthcareSolutionPage lang={lang} scenarioId={solutionId} />;
+  }
 
   if (!scenario) {
     return (

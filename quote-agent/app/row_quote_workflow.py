@@ -22,6 +22,10 @@ from app.flexible_workflow import _normalize_product_name, _normalize_region, _t
 from app.models import PriceComponent, QuoteWorkbook, RowQuoteProgress, RowQuoteSummary
 from app.pricebook import HOURS_PER_MONTH, load_pricebook, pick_ecs_match
 
+
+class TaskCancelledError(Exception):
+    pass
+
 logger = logging.getLogger(__name__)
 
 # Concurrency configuration
@@ -272,7 +276,8 @@ def _header_context(
 def _collect_rows(workbook: Any) -> tuple[list[RowCandidate], dict[str, int]]:
     rows: list[RowCandidate] = []
     original_widths: dict[str, int] = {}
-    for ws in workbook.worksheets:
+    worksheets = workbook.worksheets[:1]
+    for ws in worksheets:
         max_col = ws.max_column
         merged_lookup, merged_row_groups = _build_merged_metadata(ws)
         original_widths[ws.title] = max_col
@@ -785,11 +790,14 @@ def _apply_anchor_inheritance(rows: list[RowCandidate], mappings: dict[str, RowM
     return mappings
 
 
-def _maas_map_rows(rows: list[RowCandidate], quote_context: dict[str, Any], mapping_progress_callback: Any = None) -> dict[str, RowMapping]:
+def _maas_map_rows(rows: list[RowCandidate], quote_context: dict[str, Any], mapping_progress_callback: Any = None, cancel_check: Any = None) -> dict[str, RowMapping]:
     api_key = os.getenv("HUAWEI_MAAS_API_KEY")
     base_url = os.getenv("HUAWEI_MAAS_BASE_URL")
     model = os.getenv("HUAWEI_MAAS_MODEL")
     if not api_key or not base_url or not model:
+        return {}
+
+    if callable(cancel_check) and cancel_check():
         return {}
 
     BATCH_SIZE = ROW_QUOTE_MAAS_BATCH_SIZE
@@ -818,6 +826,8 @@ def _maas_map_rows(rows: list[RowCandidate], quote_context: dict[str, Any], mapp
     ]
 
     def _run_batch(start: int, batch: list[RowCandidate]) -> tuple[int, dict[str, RowMapping]]:
+        if callable(cancel_check) and cancel_check():
+            return start, {}
         batch_rows = {
             row.row_id: {
                 "sheet": row.sheet,
@@ -848,6 +858,8 @@ def _maas_map_rows(rows: list[RowCandidate], quote_context: dict[str, Any], mapp
         payload = None
         with _maas_global_semaphore:
             for attempt in range(1 + MAX_RETRIES):
+                if callable(cancel_check) and cancel_check():
+                    return start, {}
                 try:
                     with httpx.Client(timeout=TIMEOUT) as client:
                         response = client.post(
@@ -872,6 +884,8 @@ def _maas_map_rows(rows: list[RowCandidate], quote_context: dict[str, Any], mapp
                     logger.warning("Row quote MaaS batch mapping attempt %d failed: %s", attempt + 1, exc)
                     _debug_log("maas_response_error", model=model, batch_start=start, attempt=attempt + 1, error=str(exc))
 
+        if callable(cancel_check) and cancel_check():
+            return start, {}
         result: dict[str, RowMapping] = {}
         if payload:
             for item in payload.get("rows", []):
@@ -913,7 +927,15 @@ def _maas_map_rows(rows: list[RowCandidate], quote_context: dict[str, Any], mapp
     with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
         futures = {executor.submit(_run_batch, start, batch): start for start, batch in batches}
         for future in as_completed(futures):
+            if callable(cancel_check) and cancel_check():
+                for f in futures:
+                    f.cancel()
+                break
             start, batch_mappings = future.result()
+            if callable(cancel_check) and cancel_check():
+                for f in futures:
+                    f.cancel()
+                break
             mapped.update(batch_mappings)
             if callable(mapping_progress_callback):
                 mapping_progress_callback(min(start + BATCH_SIZE, len(rows)), len(rows))
@@ -1386,7 +1408,7 @@ def _summarize(results: list[PriceResult]) -> RowQuoteSummary:
     )
 
 
-def annotate_row_quote_workbook(upload: dict[str, Any], quote_context: dict[str, Any], progress_callback: Any = None, stage_callback: Any = None) -> tuple[QuoteWorkbook, RowQuoteSummary]:
+def annotate_row_quote_workbook(upload: dict[str, Any], quote_context: dict[str, Any], progress_callback: Any = None, stage_callback: Any = None, cancel_check: Any = None) -> tuple[QuoteWorkbook, RowQuoteSummary]:
     filename = str(upload.get("filename") or "flexible.xlsx")
     if not filename.lower().endswith(".xlsx"):
         raise ValueError("Only Excel .xlsx files are supported for row-level flexible quote annotation.")
@@ -1399,6 +1421,8 @@ def annotate_row_quote_workbook(upload: dict[str, Any], quote_context: dict[str,
     if callable(stage_callback):
         stage_callback("collect_rows")
     rows, original_widths = _collect_rows(workbook)
+    if callable(cancel_check) and cancel_check():
+        raise TaskCancelledError("Task was cancelled by user.")
     _debug_log(
         "collect_rows",
         filename=filename,
@@ -1414,6 +1438,8 @@ def annotate_row_quote_workbook(upload: dict[str, Any], quote_context: dict[str,
 
     if callable(stage_callback):
         stage_callback("pipeline_rows")
+    if callable(cancel_check) and cancel_check():
+        raise TaskCancelledError("Task was cancelled by user.")
     if callable(progress_callback):
         progress_callback(RowQuoteProgress(
             total_rows=total_rows,
@@ -1423,7 +1449,7 @@ def annotate_row_quote_workbook(upload: dict[str, Any], quote_context: dict[str,
             stage_total_rows=total_rows,
         ))
 
-    for ws in workbook.worksheets:
+    for ws in workbook.worksheets[:1]:
         start_col = original_widths[ws.title] + 1
         _write_quote_headers(ws, start_col)
 
@@ -1459,6 +1485,8 @@ def annotate_row_quote_workbook(upload: dict[str, Any], quote_context: dict[str,
     def _try_price_ready_rows() -> None:
         nonlocal priced_count
         for row in rows:
+            if callable(cancel_check) and cancel_check():
+                return
             if row.row_id in priced_row_ids:
                 continue
             if row.row_id not in final_mappings:
@@ -1508,7 +1536,7 @@ def annotate_row_quote_workbook(upload: dict[str, Any], quote_context: dict[str,
         mapped_count = new_mapped_count
         _try_price_ready_rows()
 
-    llm_mappings = _maas_map_rows(rows, quote_context, mapping_progress_callback=on_mapping_progress)
+    llm_mappings = _maas_map_rows(rows, quote_context, mapping_progress_callback=on_mapping_progress, cancel_check=cancel_check)
     raw_mappings.update(llm_mappings)
     mapped_count = len(raw_mappings)
 
@@ -1518,6 +1546,9 @@ def annotate_row_quote_workbook(upload: dict[str, Any], quote_context: dict[str,
     mapped_count = len(raw_mappings)
 
     _try_price_ready_rows()
+
+    if callable(cancel_check) and cancel_check():
+        raise TaskCancelledError("Task was cancelled by user.")
 
     output = BytesIO()
     workbook.save(output)

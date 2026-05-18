@@ -2433,3 +2433,272 @@ a {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Healthcare solution page ── */
+
+.healthcare-solution-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px 24px 64px;
+}
+
+.healthcare-hero {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  min-height: 340px;
+  display: flex;
+  align-items: flex-end;
+  background-size: cover;
+  background-position: center;
+  margin-bottom: 48px;
+}
+
+.healthcare-hero-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.15), rgba(0, 0, 0, 0.72));
+}
+
+.healthcare-hero-content {
+  position: relative;
+  z-index: 1;
+  padding: 48px 40px;
+  color: #fff;
+  max-width: 800px;
+}
+
+.healthcare-hero-content .section-kicker {
+  color: rgba(255, 255, 255, 0.8);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.healthcare-hero-content h1 {
+  font-size: 2.2rem;
+  font-weight: 700;
+  margin: 8px 0 12px;
+  line-height: 1.2;
+}
+
+.healthcare-hero-content p {
+  font-size: 1.05rem;
+  line-height: 1.6;
+  opacity: 0.92;
+  margin: 0 0 16px;
+}
+
+.healthcare-section {
+  padding: 40px 0;
+}
+
+.healthcare-section-alt {
+  background: #f7f8fa;
+  margin: 0 -24px;
+  padding-left: 24px;
+  padding-right: 24px;
+  border-radius: 8px;
+}
+
+.healthcare-section-inner {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.healthcare-section h2 {
+  font-size: 1.4rem;
+  font-weight: 600;
+  color: #1a1a2e;
+  margin: 0 0 20px;
+}
+
+.healthcare-section p {
+  font-size: 0.95rem;
+  line-height: 1.7;
+  color: #444;
+  margin: 0 0 12px;
+}
+
+/* Metrics grid */
+.healthcare-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 20px;
+}
+
+.healthcare-metric-card {
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  padding: 24px;
+  text-align: center;
+}
+
+.healthcare-metric-value {
+  display: block;
+  font-size: 2rem;
+  font-weight: 700;
+  color: #c7000b;
+  margin-bottom: 4px;
+}
+
+.healthcare-metric-label {
+  display: block;
+  font-size: 0.85rem;
+  color: #666;
+}
+
+/* Module cards */
+.healthcare-modules-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 24px;
+}
+
+.healthcare-module-card {
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.healthcare-module-card img {
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+}
+
+.healthcare-module-card-body {
+  padding: 20px;
+}
+
+.healthcare-module-card-body h4 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #1a1a2e;
+  margin: 0 0 8px;
+}
+
+.healthcare-module-card-body p {
+  font-size: 0.88rem;
+  line-height: 1.6;
+  color: #555;
+  margin: 0;
+}
+
+/* Architecture list */
+.healthcare-arch-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 16px;
+}
+
+.healthcare-arch-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 0.92rem;
+  line-height: 1.6;
+  color: #444;
+}
+
+.healthcare-check-icon {
+  flex-shrink: 0;
+  color: #c7000b;
+  margin-top: 2px;
+}
+
+/* Products grid */
+.healthcare-products-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+}
+
+.healthcare-product-card {
+  background: #f7f8fa;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+}
+
+.healthcare-product-card strong {
+  display: block;
+  font-size: 1rem;
+  color: #1a1a2e;
+  margin-bottom: 4px;
+}
+
+.healthcare-product-card span {
+  display: block;
+  font-size: 0.8rem;
+  color: #666;
+}
+
+/* Outcomes list */
+.healthcare-outcomes-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 28px;
+}
+
+.healthcare-outcomes-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: #444;
+  margin-bottom: 12px;
+}
+
+/* CTA row */
+.healthcare-section-cta {
+  border-top: 2px solid #c7000b;
+  padding-top: 40px;
+  margin-top: 16px;
+}
+
+.healthcare-cta-row {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* Healthcare responsive */
+@media (max-width: 768px) {
+  .healthcare-hero {
+    min-height: 260px;
+  }
+
+  .healthcare-hero-content {
+    padding: 32px 20px;
+  }
+
+  .healthcare-hero-content h1 {
+    font-size: 1.6rem;
+  }
+
+  .healthcare-modules-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .healthcare-arch-list {
+    grid-template-columns: 1fr;
+  }
+
+  .healthcare-metrics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .healthcare-products-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

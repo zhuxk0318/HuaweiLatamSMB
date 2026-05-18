@@ -314,7 +314,7 @@ class FlexibleReviewRequest(BaseModel):
     audit_log: list[AuditEntry] = Field(default_factory=list)
 
 
-FlexiblePreviewTaskStatus = Literal["queued", "running", "succeeded", "failed"]
+FlexiblePreviewTaskStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 FlexiblePreviewStageStatus = Literal["pending", "running", "completed", "skipped", "failed"]
 
 

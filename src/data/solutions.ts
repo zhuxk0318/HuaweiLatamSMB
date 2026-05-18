@@ -1,6 +1,6 @@
 import type { Lang } from "./i18n";
 
-export type SolutionEntryId = "ai-maas" | "cloud-to-cloud" | "on-prem-to-cloud";
+export type SolutionEntryId = "ai-maas" | "cloud-to-cloud" | "on-prem-to-cloud" | "enterprise";
 
 export type LocalizedPair = {
   en: string;
@@ -33,6 +33,8 @@ export type SolutionScenario = {
   salesTalkTrack: LocalizedPair[];
   expectedOutcomes: LocalizedPair[];
   heroImage: string;
+  externalUrls?: { en: string; es: string };
+  detailVariant?: "default" | "healthcare";
 };
 
 export type SolutionEntry = {
@@ -108,28 +110,24 @@ export const solutionEntries: SolutionEntry[] = [
     heroImage: "/assets/huawei/flexus.jpg",
     scenarioIds: ["sap-erp-on-cloud", "backup-dr-security", "workspace-vmware-migration"],
   },
+  {
+    id: "enterprise",
+    title: {
+      en: "Enterprise Infrastructure and Industry Solutions",
+      es: "Infraestructura empresarial y soluciones sectoriales",
+    },
+    summary: {
+      en: "Huawei Enterprise networking, connectivity, and industry-specific solutions for healthcare, public sector, and beyond.",
+      es: "Redes empresariales Huawei, conectividad y soluciones sectoriales para salud, sector público y más.",
+    },
+    tags: ["WLAN", "Healthcare", "Enterprise Network"],
+    heroImage: "/assets/huawei/official-cache/enterprise-wlan-banner.jpg",
+    scenarioIds: ["enterprise-wlan", "ai-medical-imaging", "digital-pathology"],
+  },
 ];
 
 export const solutionEntryCards: SolutionEntryCard[] = [
   ...solutionEntries.map((entry) => ({ kind: "internal" as const, entry })),
-  {
-    kind: "external",
-    id: "enterprise-connectivity",
-    title: {
-      es: "Conectividad para empresas y sector público",
-      en: "Connectivity for Enterprise and Public Sector",
-    },
-    summary: {
-      es: "Nueva entrada para escenarios de conectividad Huawei. En esta primera fase abre directamente la solución oficial de WLAN.",
-      en: "New entry for Huawei connectivity scenarios. In this first phase it opens the official WLAN solution directly.",
-    },
-    tags: ["WLAN", "Wi-Fi", "Enterprise Network"],
-    heroImage: "/assets/huawei/official-cache/enterprise-wlan-banner.jpg",
-    externalUrls: {
-      es: "https://e.huawei.com/mx/products/wlan",
-      en: "https://e.huawei.com/sg/products/wlan",
-    },
-  },
 ];
 
 export const solutionScenarios: SolutionScenario[] = [
@@ -623,6 +621,177 @@ export const solutionScenarios: SolutionScenario[] = [
       { en: "A practical on-prem to cloud story that does not depend on a full application rewrite.", es: "Una narrativa práctica de on-prem a cloud que no depende de rehacer todas las aplicaciones." },
     ],
     heroImage: "/assets/huawei/flexus.jpg",
+  },
+  {
+    id: "enterprise-wlan",
+    entryId: "enterprise",
+    title: { en: "Enterprise WLAN", es: "WLAN Empresarial" },
+    oneLiner: {
+      en: "High-performance wireless LAN for campuses, hospitals, schools, and public-sector facilities.",
+      es: "Red WLAN de alto rendimiento para campus, hospitales, escuelas e instalaciones del sector público.",
+    },
+    targetCustomers: [
+      { en: "Campus and multi-building enterprises", es: "Empresas de campus y múltiples edificios" },
+      { en: "Hospitals and healthcare facilities", es: "Hospitales y centros de salud" },
+      { en: "Public-sector and education networks", es: "Redes de sector público y educación" },
+    ],
+    painPoints: [
+      { en: "Wi-Fi coverage gaps in high-density areas.", es: "Brechas de cobertura Wi-Fi en zonas de alta densidad." },
+      { en: "Manual AP management across large sites.", es: "Gestión manual de APs en sitios extensos." },
+      { en: "Security and roaming issues for mission-critical devices.", es: "Problemas de seguridad y roaming para dispositivos misión-críticos." },
+    ],
+    solutionApproach: [
+      { en: "Huawei AirEngine Wi-Fi 6/7 APs with intelligent roaming and AI-driven optimization.", es: "APs Huawei AirEngine Wi-Fi 6/7 con roaming inteligente y optimización impulsada por IA." },
+      { en: "Unified management with iMaster NCE for policy, visibility, and automation.", es: "Gestión unificada con iMaster NCE para políticas, visibilidad y automatización." },
+      { en: "CloudCampus architecture for centralized multi-site operations.", es: "Arquitectura CloudCampus para operaciones centralizadas multi-sitio." },
+    ],
+    recommendedServices: ["AirEngine Wi-Fi 6", "iMaster NCE", "CloudCampus"],
+    demoSkillLinks: [],
+    quickIntegration: {
+      prerequisites: [
+        { en: "Site survey and capacity planning for target areas.", es: "Levantamiento del sitio y planificación de capacidad para áreas objetivo." },
+        { en: "Network architecture review and VLAN/policy design.", es: "Revisión de arquitectura de red y diseño de VLAN/políticas." },
+      ],
+      steps: [
+        { en: "Deploy APs and configure SSID, security, and roaming policies.", es: "Despliegue APs y configure SSID, seguridad y políticas de roaming." },
+        { en: "Integrate with iMaster NCE for centralized management.", es: "Integre con iMaster NCE para gestión centralizada." },
+        { en: "Validate coverage, roaming, and performance with live traffic.", es: "Valide cobertura, roaming y rendimiento con tráfico real." },
+      ],
+      configuration: [
+        { en: "Define RF profiles, QoS policies, and authentication methods.", es: "Defina perfiles RF, políticas QoS y métodos de autenticación." },
+        { en: "Set up monitoring dashboards and alerting thresholds.", es: "Configure dashboards de monitoreo y umbrales de alertas." },
+      ],
+      apiAccess: [
+        { en: "Use iMaster NCE REST API for automation and reporting.", es: "Use la API REST de iMaster NCE para automatización y reportes." },
+        { en: "Integrate with existing NMS or ITSM for unified operations.", es: "Integre con NMS o ITSM existente para operaciones unificadas." },
+      ],
+    },
+    salesTalkTrack: [
+      { en: "How many APs are managed manually today?", es: "¿Cuántos APs se gestionan manualmente hoy?" },
+      { en: "What is the cost of Wi-Fi-related support incidents?", es: "¿Cuál es el costo de incidentes de soporte relacionados con Wi-Fi?" },
+    ],
+    expectedOutcomes: [
+      { en: "Reliable high-density Wi-Fi with AI-driven optimization.", es: "Wi-Fi confiable de alta densidad con optimización impulsada por IA." },
+      { en: "Centralized management reducing operational overhead.", es: "Gestión centralizada que reduce la carga operativa." },
+      { en: "Seamless roaming for critical medical and enterprise devices.", es: "Roaming sin interrupciones para dispositivos médicos y empresariales críticos." },
+    ],
+    heroImage: "/assets/huawei/official-cache/enterprise-wlan-banner.jpg",
+    externalUrls: {
+      en: "https://e.huawei.com/sg/products/wlan",
+      es: "https://e.huawei.com/mx/products/wlan",
+    },
+  },
+  {
+    id: "ai-medical-imaging",
+    entryId: "enterprise",
+    title: { en: "AI-Assisted Medical Imaging", es: "Imágenes Médicas Asistidas por IA" },
+    oneLiner: {
+      en: "AI-powered screening, diagnosis, and collaboration for radiology departments — from chest X-ray and bone fracture detection to lung cancer screening.",
+      es: "Cribado, diagnóstico y colaboración impulsados por IA para departamentos de radiología — desde radiografía de tórax y detección de fracturas hasta cribado de cáncer pulmonar.",
+    },
+    targetCustomers: [
+      { en: "Hospitals with radiology and imaging departments", es: "Hospitales con departamentos de radiología e imágenes" },
+      { en: "Public health networks centralizing diagnostic imaging", es: "Redes de salud pública que centralizan imágenes diagnósticas" },
+      { en: "Health systems seeking AI-assisted screening at scale", es: "Sistemas de salud que buscan cribado asistido por IA a escala" },
+    ],
+    painPoints: [
+      { en: "Radiologist workload is growing faster than staffing can support.", es: "La carga de trabajo radiológico crece más rápido que la capacidad de personal." },
+      { en: "Diagnostic delays in high-volume screening programs.", es: "Retrasos diagnósticos en programas de cribado de alto volumen." },
+      { en: "Image sharing and collaboration across departments is slow and fragmented.", es: "El intercambio de imágenes y la colaboración entre departamentos es lento y fragmentado." },
+    ],
+    solutionApproach: [
+      { en: "AI-assisted screening and diagnosis for chest X-ray, bone fracture, and lung cancer detection.", es: "Cribado y diagnóstico asistidos por IA para radiografía de tórax, fracturas y detección de cáncer pulmonar." },
+      { en: "Quality control, image sharing, and 3D imaging collaboration across the hospital network.", es: "Control de calidad, intercambio de imágenes y colaboración de imágenes 3D en la red hospitalaria." },
+      { en: "Integrated PACS and AI inference pipeline on Huawei infrastructure.", es: "Pipeline integrado de PACS e inferencia de IA sobre infraestructura Huawei." },
+    ],
+    recommendedServices: ["Huawei AI Server", "Huawei All-Flash Storage", "Partner AI Application", "PACS Integration"],
+    demoSkillLinks: [],
+    quickIntegration: {
+      prerequisites: [
+        { en: "DICOM-compatible PACS system and radiology workflow.", es: "Sistema PACS compatible con DICOM y flujo radiológico." },
+        { en: "Annotated training dataset for target AI models.", es: "Dataset de entrenamiento anotado para los modelos IA objetivo." },
+      ],
+      steps: [
+        { en: "Deploy Huawei AI Server and partner AI application in the hospital data center.", es: "Despliegue Huawei AI Server y la aplicación IA partner en el datacenter del hospital." },
+        { en: "Integrate AI inference with PACS image routing and radiologist review workflow.", es: "Integre la inferencia IA con el ruteo de imágenes PACS y el flujo de revisión radiológica." },
+        { en: "Validate AI accuracy with retrospective cases before live deployment.", es: "Valide precisión de IA con casos retrospectivos antes del despliegue en vivo." },
+      ],
+      configuration: [
+        { en: "Define AI model scope, inference latency targets, and GPU allocation on AI Server.", es: "Defina alcance de modelos IA, objetivos de latencia de inferencia y asignación de GPU en AI Server." },
+        { en: "Set up image retention, backup, and cross-department sharing policies on All-Flash Storage.", es: "Configure retención de imágenes, backup y políticas de intercambio entre departamentos en All-Flash Storage." },
+      ],
+      apiAccess: [
+        { en: "Connect AI inference service to PACS and radiology workstations via hospital network.", es: "Conecte el servicio de inferencia IA a PACS y estaciones radiológicas vía red hospitalaria." },
+        { en: "Track screening volume, AI accuracy, and radiologist turnaround time.", es: "Monitoree volumen de cribado, precisión de IA y tiempo de respuesta radiológica." },
+      ],
+    },
+    salesTalkTrack: [
+      { en: "How long do radiologists wait for screening results today?", es: "¿Cuánto esperan los radiólogos por resultados de cribado hoy?" },
+      { en: "Would AI-assisted triage reduce missed findings in high-volume programs?", es: "¿Reduciría el triaje asistido por IA los hallazgos omitidos en programas de alto volumen?" },
+    ],
+    expectedOutcomes: [
+      { en: "AI-assisted diagnosis efficiency +50%.", es: "Eficiencia de diagnóstico asistido por IA +50%." },
+      { en: "Diagnosis accuracy improvement +10%.", es: "Mejora de precisión diagnóstica +10%." },
+      { en: "Faster image collaboration and reduced screening backlogs.", es: "Colaboración de imágenes más rápida y reducción de backlogs de cribado." },
+    ],
+    heroImage: "/assets/huawei/enterprise-healthcare/medical-imaging-banner.jpg",
+    detailVariant: "healthcare",
+  },
+  {
+    id: "digital-pathology",
+    entryId: "enterprise",
+    title: { en: "Digital Pathology", es: "Patología Digital" },
+    oneLiner: {
+      en: "Whole-slide imaging, pyramid-style storage, and sub-second retrieval for pathology departments — without upgrading network or client endpoints.",
+      es: "Imágenes de laminillas completas, almacenamiento piramidal y recuperación sub-segundo para departamentos de patología — sin actualizar red ni endpoints.",
+    },
+    targetCustomers: [
+      { en: "Hospital pathology labs transitioning to digital workflows", es: "Laboratorios de patología hospitalaria en transición a flujos digitales" },
+      { en: "Reference labs and multi-site pathology networks", es: "Laboratorios de referencia y redes de patología multi-sitio" },
+      { en: "Research institutions with large slide archives", es: "Instituciones de investigación con grandes archivos de laminillas" },
+    ],
+    painPoints: [
+      { en: "Physical slide storage, retrieval, and sharing is slow and space-intensive.", es: "El almacenamiento, recuperación e intercambio de laminillas físicas es lento y consume mucho espacio." },
+      { en: "High-resolution slide viewing requires expensive workstations and high-bandwidth network.", es: "La visualización de laminillas de alta resolución requiere estaciones costosas y red de alto ancho de banda." },
+      { en: "Pathologist collaboration across sites is limited by physical slide logistics.", es: "La colaboración de patólogos entre sitios está limitada por la logística de laminillas físicas." },
+    ],
+    solutionApproach: [
+      { en: "Whole-slide digitization with pyramid-style multi-resolution storage and retrieval.", es: "Digitalización de laminillas completas con almacenamiento y recuperación piramidal multi-resolución." },
+      { en: "Sub-second image retrieval without upgrading existing network or client endpoints.", es: "Recuperación de imágenes sub-segundo sin actualizar la red existente ni los endpoints de cliente." },
+      { en: "Hospital-wide data security with encrypted storage, access control, and audit logging.", es: "Seguridad de datos hospitalaria con almacenamiento cifrado, control de acceso y logging de auditoría." },
+    ],
+    recommendedServices: ["Huawei AI Server", "Huawei All-Flash Storage", "Digital Pathology Viewer", "LIS Integration"],
+    demoSkillLinks: [],
+    quickIntegration: {
+      prerequisites: [
+        { en: "Whole-slide scanner and DICOM-compatible LIS integration.", es: "Escáner de laminillas completas e integración LIS compatible con DICOM." },
+        { en: "Storage capacity planning for slide volume and retention policy.", es: "Planificación de capacidad de almacenamiento para volumen de laminillas y política de retención." },
+      ],
+      steps: [
+        { en: "Deploy Huawei AI Server and All-Flash Storage with pyramid-style storage configuration.", es: "Despliegue Huawei AI Server y All-Flash Storage con configuración de almacenamiento piramidal." },
+        { en: "Integrate with LIS for slide metadata, ordering, and reporting workflow.", es: "Integre con LIS para metadatos de laminillas, órdenes y flujo de reportes." },
+        { en: "Validate retrieval speed, image quality, and pathologist workflow before go-live.", es: "Valide velocidad de recuperación, calidad de imagen y flujo del patólogo antes del go-live." },
+      ],
+      configuration: [
+        { en: "Define resolution tiers, compression policy, and storage lifecycle on All-Flash Storage.", es: "Defina tiers de resolución, política de compresión y ciclo de vida en All-Flash Storage." },
+        { en: "Configure access control, encryption, and audit logging for compliance.", es: "Configure control de acceso, cifrado y logging de auditoría para cumplimiento." },
+      ],
+      apiAccess: [
+        { en: "Connect slide viewer and retrieval service to pathologist workstations and LIS.", es: "Conecte el visor de laminillas y servicio de recuperación a estaciones de patología y LIS." },
+        { en: "Track retrieval latency, storage utilization, and access patterns.", es: "Monitoree latencia de recuperación, utilización de almacenamiento y patrones de acceso." },
+      ],
+    },
+    salesTalkTrack: [
+      { en: "How many physical slides are stored and how long does retrieval take?", es: "¿Cuántas laminillas físicas se almacenan y cuánto tarda la recuperación?" },
+      { en: "Would sub-second digital retrieval replace the need for slide courier logistics?", es: "¿Reemplazaría la recuperación digital sub-segundo la logística de mensajería de laminillas?" },
+    ],
+    expectedOutcomes: [
+      { en: "Image retrieval within 1 second.", es: "Recuperación de imágenes en menos de 1 segundo." },
+      { en: "30% storage space savings with pyramid-style compression.", es: "30% de ahorro de espacio de almacenamiento con compresión piramidal." },
+      { en: "Elimination of physical slide courier and associated delays.", es: "Eliminación de mensajería de laminillas físicas y demoras asociadas." },
+    ],
+    heroImage: "/assets/huawei/enterprise-healthcare/digital-pathology-banner.jpg",
+    detailVariant: "healthcare",
   },
 ];
 

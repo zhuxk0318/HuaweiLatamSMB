@@ -37,7 +37,7 @@ type RowQuoteProgress = {
 
 type RowQuoteTaskResponse = {
   task_id: string;
-  status: "queued" | "running" | "succeeded" | "failed";
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   current_stage?: string | null;
   summary?: RowQuoteSummary | null;
   progress?: RowQuoteProgress | null;
@@ -209,6 +209,7 @@ export function FlexibleQuoteEstimator({ lang }: { lang: Lang }) {
   const [task, setTask] = useState<RowQuoteTaskResponse | null>(null);
   const [error, setError] = useState("");
   const [exporting, setExporting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const pollTokenRef = useRef(0);
 
   useEffect(() => {
@@ -266,6 +267,7 @@ export function FlexibleQuoteEstimator({ lang }: { lang: Lang }) {
         return;
       }
       if (payload.status === "failed") { setPreviewState("failed"); setError(payload.error?.detail || payload.error?.message || t.previewFailed); return; }
+      if (payload.status === "cancelled") { pollTokenRef.current += 1; setTask(null); setTaskId(""); setError(""); setPreviewState(file ? "ready" : "idle"); return; }
       setPreviewState("succeeded");
       setError("");
     } catch (err) {
@@ -318,10 +320,17 @@ export function FlexibleQuoteEstimator({ lang }: { lang: Lang }) {
 
   async function runCancel() {
     if (!taskId) return;
+    setCancelling(true);
     try {
       const response = await fetch(`${QUOTE_API_BASE_URL}/api/quotes/flexible/annotate/tasks/${taskId}/cancel`, { method: "POST" });
       if (!response.ok) throw new Error(await getErrorDetail(response, t.cancelFailed));
+      pollTokenRef.current += 1;
+      setTask(null);
+      setTaskId("");
+      setError("");
+      setPreviewState(file ? "ready" : "idle");
     } catch (err) { setError(err instanceof Error ? err.message : t.cancelFailed); }
+    finally { setCancelling(false); }
   }
 
   const currentStage = task?.current_stage || (progressBusy ? "collect_rows" : null);
@@ -350,7 +359,7 @@ export function FlexibleQuoteEstimator({ lang }: { lang: Lang }) {
             {t.export}
           </button>
           {progressBusy && (
-            <button type="button" className="upload-button secondary" onClick={runCancel}>
+            <button type="button" className="upload-button secondary" onClick={runCancel} disabled={cancelling}>
               {t.cancel}
             </button>
           )}

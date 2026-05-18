@@ -78,6 +78,7 @@ function ScenarioCard({
   const l = labels[lang];
   const primarySkill = scenario.demoSkillLinks[0];
   const scenarioEntry = solutionEntries.find((entry) => entry.id === scenario.entryId) ?? activeEntry;
+  const isExternal = Boolean(scenario.externalUrls);
 
   return (
     <article className="scenario-card">
@@ -85,6 +86,7 @@ function ScenarioCard({
       <div className="scenario-card-body">
         <div className="scenario-card-heading">
           <span className="scenario-entry-badge">{textFor(lang, scenarioEntry.title)}</span>
+          {isExternal && <span className="external-link-badge"><ExternalLink size={12} /> {l.externalBadge}</span>}
         </div>
         <h3>{textFor(lang, scenario.title)}</h3>
         <p>{textFor(lang, scenario.oneLiner)}</p>
@@ -96,56 +98,81 @@ function ScenarioCard({
           ))}
         </div>
         <div className="scenario-actions">
-          <a
-            className="primary-action"
-            href={`#/solutions/${scenario.id}`}
-            onClick={() =>
-              trackClick({
-                click_target: "scenario_view_solution",
-                click_section: "solutions_scenarios",
-                destination: `#/solutions/${scenario.id}`,
-                entry_id: activeEntry.id,
-                scenario_id: scenario.id,
-              })
-            }
-          >
-            {l.viewSolution}
-            <ArrowRight size={16} />
-          </a>
-          <a
-            className="secondary-action light"
-            href={primarySkill.url}
-            target="_blank"
-            rel="noreferrer"
-            onClick={() =>
-              trackClick({
-                click_target: "scenario_view_skill",
-                click_section: "solutions_scenarios",
-                destination: primarySkill.url,
-                entry_id: activeEntry.id,
-                scenario_id: scenario.id,
-              })
-            }
-          >
-            {l.viewSkill}
-            <ExternalLink size={16} />
-          </a>
-          <a
-            className="text-action"
-            href={`#/solutions/${scenario.id}#integration`}
-            onClick={() =>
-              trackClick({
-                click_target: "scenario_quick_integration",
-                click_section: "solutions_scenarios",
-                destination: `#/solutions/${scenario.id}#integration`,
-                entry_id: activeEntry.id,
-                scenario_id: scenario.id,
-              })
-            }
-          >
-            {l.quickIntegration}
-            <ArrowRight size={15} />
-          </a>
+          {isExternal ? (
+            <a
+              className="primary-action"
+              href={lang === "es" ? scenario.externalUrls!.es : scenario.externalUrls!.en}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() =>
+                trackClick({
+                  click_target: "scenario_open_official",
+                  click_section: "solutions_scenarios",
+                  destination: lang === "es" ? scenario.externalUrls!.es : scenario.externalUrls!.en,
+                  entry_id: activeEntry.id,
+                  scenario_id: scenario.id,
+                })
+              }
+            >
+              {l.openOfficial}
+              <ExternalLink size={16} />
+            </a>
+          ) : (
+            <a
+              className="primary-action"
+              href={`#/solutions/${scenario.id}`}
+              onClick={() =>
+                trackClick({
+                  click_target: "scenario_view_solution",
+                  click_section: "solutions_scenarios",
+                  destination: `#/solutions/${scenario.id}`,
+                  entry_id: activeEntry.id,
+                  scenario_id: scenario.id,
+                })
+              }
+            >
+              {l.viewSolution}
+              <ArrowRight size={16} />
+            </a>
+          )}
+          {!isExternal && primarySkill && (
+            <a
+              className="secondary-action light"
+              href={primarySkill.url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() =>
+                trackClick({
+                  click_target: "scenario_view_skill",
+                  click_section: "solutions_scenarios",
+                  destination: primarySkill.url,
+                  entry_id: activeEntry.id,
+                  scenario_id: scenario.id,
+                })
+              }
+            >
+              {l.viewSkill}
+              <ExternalLink size={16} />
+            </a>
+          )}
+          {!isExternal && (
+            <a
+              className="text-action"
+              href={`#/solutions/${scenario.id}#integration`}
+              onClick={() =>
+                trackClick({
+                  click_target: "scenario_quick_integration",
+                  click_section: "solutions_scenarios",
+                  destination: `#/solutions/${scenario.id}#integration`,
+                  entry_id: activeEntry.id,
+                  scenario_id: scenario.id,
+                })
+              }
+            >
+              {l.quickIntegration}
+              <ArrowRight size={15} />
+            </a>
+          )}
         </div>
       </div>
     </article>

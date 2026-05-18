@@ -16,7 +16,7 @@ from app.models import (
     RowQuoteTaskError,
     RowQuoteTaskResponse,
 )
-from app.row_quote_workflow import annotate_row_quote_workbook
+from app.row_quote_workflow import TaskCancelledError, annotate_row_quote_workbook
 
 TASK_TTL_SECONDS = 1800
 
@@ -77,10 +77,6 @@ def _update_progress(task_id: str, progress: RowQuoteProgress) -> None:
         _touch(task)
 
 
-class TaskCancelledError(Exception):
-    pass
-
-
 def _is_cancelled(task_id: str) -> bool:
     with _lock:
         task = _tasks.get(task_id)
@@ -99,7 +95,7 @@ def _run_annotation_task(task_id: str, upload: dict[str, Any], quote_context: di
             raise TaskCancelledError("Task was cancelled by user.")
 
     try:
-        workbook, summary = annotate_row_quote_workbook(upload, quote_context, progress_callback=on_progress, stage_callback=on_stage)
+        workbook, summary = annotate_row_quote_workbook(upload, quote_context, progress_callback=on_progress, stage_callback=on_stage, cancel_check=lambda: _is_cancelled(task_id))
         with _lock:
             task = _tasks.get(task_id)
             if not task:
@@ -118,12 +114,9 @@ def _run_annotation_task(task_id: str, upload: dict[str, Any], quote_context: di
             task = _tasks.get(task_id)
             if not task:
                 return
-            task["status"] = "failed"
-            task["error"] = {
-                "message": "Task was cancelled by user.",
-                "detail": "The annotation task was cancelled while running.",
-                "last_stage": task.get("current_stage") or "collect_rows",
-            }
+            task["status"] = "cancelled"
+            task["current_stage"] = "cancelled"
+            task["error"] = None
             task["finished_at"] = _now_iso()
             task["finished_at_epoch"] = time.time()
             _touch(task)
@@ -182,6 +175,8 @@ def get_annotation_workbook(task_id: str) -> QuoteWorkbook:
         if not task:
             raise HTTPException(status_code=404, detail="Flexible annotate task not found.")
         if task["status"] != "succeeded" or not task.get("workbook"):
+            if task["status"] == "cancelled":
+                raise HTTPException(status_code=409, detail="Task was cancelled; no workbook to export.")
             raise HTTPException(status_code=409, detail="Flexible annotate task is not ready for export.")
         return QuoteWorkbook.model_validate(task["workbook"])
 
@@ -192,7 +187,7 @@ def cancel_annotation_task(task_id: str) -> RowQuoteTaskResponse:
         task = _tasks.get(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Flexible annotate task not found.")
-        if task["status"] not in ("queued", "running"):
+        if task["status"] not in ("queued", "running", "cancelled"):
             raise HTTPException(status_code=409, detail="Task is not running or queued; cannot cancel.")
         task["cancelled"] = True
         _touch(task)

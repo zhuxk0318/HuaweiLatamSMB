@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from starlette.datastructures import UploadFile
 
 import app.flexible_workflow as flexible_workflow_mod
+import app.row_quote_workflow
 from app.flexible_pricing import load_flexible_pricing_catalog, query_flexible_pricing_catalog
 from app.flexible_workflow import (
     build_flexible_preview_response,
@@ -604,44 +605,44 @@ def test_flexible_preview_fails_when_llm_understanding_fails(monkeypatch: pytest
     assert "timeout" in (final.error.detail or "")
 
 
-def test_row_quote_workflow_appends_quote_columns_to_each_sheet(monkeypatch: pytest.MonkeyPatch):
+def test_row_quote_workflow_only_processes_first_sheet(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("app.row_quote_workflow._maas_map_rows", lambda *_args, **_kwargs: {})
     workbook, summary = annotate_row_quote_workbook(
         {"filename": "customer.xlsx", "content": make_row_quote_workbook()},
         {"region": "mexico", "language": "zh", "customer_notes": ""},
     )
 
-    assert summary.total_rows == 5
-    assert summary.quoted_rows == 3
+    assert summary.total_rows == 3
+    assert summary.quoted_rows == 1
     assert summary.manual_review_rows == 1
     assert summary.missing_price_rows == 0
     assert summary.non_quote_rows == 1
 
     annotated = load_workbook(BytesIO(workbook.content), data_only=True)
-    for sheet_name in ["Compute", "Storage"]:
-        sheet = annotated[sheet_name]
-        appended_headers = [sheet.cell(1, column).value for column in range(sheet.max_column - 9, sheet.max_column + 1)]
-        assert appended_headers == [
-            "华为云产品名",
-            "华为云规格",
-            "数量",
-            "单价",
-            "按需月价",
-            "包月价",
-            "RI 1Y月价",
-            "报价状态",
-            "映射说明",
-            "置信度",
-        ]
-
     compute = annotated["Compute"]
+    appended_headers = [compute.cell(1, column).value for column in range(compute.max_column - 9, compute.max_column + 1)]
+    assert appended_headers == [
+        "华为云产品名",
+        "华为云规格",
+        "数量",
+        "单价",
+        "按需月价",
+        "包月价",
+        "RI 1Y月价",
+        "报价状态",
+        "映射说明",
+        "置信度",
+    ]
     assert compute.cell(2, compute.max_column - 7).value == 1
     assert compute.cell(2, compute.max_column - 2).value == "已报价"
     assert "数量按 1 估算" in compute.cell(2, compute.max_column - 1).value
     assert compute.cell(3, compute.max_column - 2).value == "非报价行"
     assert compute.cell(4, compute.max_column - 2).value == "需人工确认"
+
     storage = annotated["Storage"]
-    assert storage.cell(3, storage.max_column - 2).value == "已报价"
+    assert storage.max_column == 3
+    assert storage.cell(2, storage.max_column).value == "gp-ssd 100GB"
+    assert storage.cell(3, storage.max_column).value == "mysql.s2.large"
 
 
 def test_row_quote_annotate_task_exports_original_workbook_with_added_columns(monkeypatch: pytest.MonkeyPatch):
@@ -664,7 +665,7 @@ def test_row_quote_annotate_task_exports_original_workbook_with_added_columns(mo
     assert final is not None
     assert final.status == "succeeded"
     assert final.summary is not None
-    assert final.summary.quoted_rows == 3
+    assert final.summary.quoted_rows == 1
 
     response = export_flexible_annotate_task(created.task_id)
     assert response.status_code == 200
@@ -775,7 +776,7 @@ def test_row_quote_collect_rows_expands_merged_headers_into_cells_and_context():
 
 
 def test_row_quote_anchor_inheritance_propagates_product_only(monkeypatch: pytest.MonkeyPatch):
-    def fake_maas(rows, _quote_context, mapping_progress_callback=None):
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None, cancel_check=None):
         return {
             "Merged!2": RowMapping("Merged!2", True, "CCI", "2vCPU 4GiB", 1, "Anchor row mapped to CCI.", 0.92),
             "Merged!3": RowMapping("Merged!3", True, None, "4vCPU", 4, "Child row missing product.", 0.31),
@@ -810,7 +811,7 @@ def test_row_quote_local_cce_signal_beats_inherited_cci(monkeypatch: pytest.Monk
     output = BytesIO()
     workbook.save(output)
 
-    def fake_maas(rows, _quote_context, mapping_progress_callback=None):
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None, cancel_check=None):
         return {
             "Mixed!2": RowMapping("Mixed!2", True, "CCI", "2vCPU 4GiB", 1, "Anchor row mapped to CCI.", 0.92),
             "Mixed!3": RowMapping("Mixed!3", True, None, "x0.2u.4g", 2, "Child row missing product.", 0.2),
@@ -865,7 +866,7 @@ def test_row_quote_stages_follow_correct_order(monkeypatch: pytest.MonkeyPatch):
     def on_stage(stage: str):
         stages.append(stage)
 
-    def fake_maas(rows, _quote_context, mapping_progress_callback=None):
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None, cancel_check=None):
         if callable(mapping_progress_callback):
             mapping_progress_callback(len(rows), len(rows))
         return {}
@@ -885,7 +886,7 @@ def test_row_quote_mapping_batch_progress(monkeypatch: pytest.MonkeyPatch):
     def on_progress(progress: RowQuoteProgress):
         progress_snapshots.append(progress)
 
-    def fake_maas(rows, _quote_context, mapping_progress_callback=None):
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None, cancel_check=None):
         batch_size = 3
         for start in range(0, len(rows), batch_size):
             batch = rows[start : start + batch_size]
@@ -913,7 +914,7 @@ def test_row_quote_price_rows_resets_progress(monkeypatch: pytest.MonkeyPatch):
     def on_progress(progress: RowQuoteProgress):
         progress_snapshots.append(progress)
 
-    def fake_maas(rows, _quote_context, mapping_progress_callback=None):
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None, cancel_check=None):
         if callable(mapping_progress_callback):
             mapping_progress_callback(len(rows), len(rows))
         return {}
@@ -938,7 +939,7 @@ def test_row_quote_maas_batch_failure_still_advances_progress(monkeypatch: pytes
         progress_snapshots.append(progress)
 
     call_count = 0
-    def fake_maas(rows, _quote_context, mapping_progress_callback=None):
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None, cancel_check=None):
         nonlocal call_count
         batch_size = 3
         for start in range(0, len(rows), batch_size):
@@ -961,7 +962,7 @@ def test_row_quote_maas_batch_failure_still_advances_progress(monkeypatch: pytes
 
 
 def test_row_quote_summary_unchanged_after_progress_restructure(monkeypatch: pytest.MonkeyPatch):
-    def fake_maas(rows, _quote_context, mapping_progress_callback=None):
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None, cancel_check=None):
         if callable(mapping_progress_callback):
             mapping_progress_callback(len(rows), len(rows))
         return {}
@@ -980,7 +981,7 @@ def test_pipeline_stage_order(monkeypatch: pytest.MonkeyPatch):
     def on_stage(stage: str):
         stages.append(stage)
 
-    def fake_maas(rows, _quote_context, mapping_progress_callback=None):
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None, cancel_check=None):
         if callable(mapping_progress_callback):
             mapping_progress_callback(len(rows), len(rows))
         return {}
@@ -1000,7 +1001,7 @@ def test_pipeline_dual_progress(monkeypatch: pytest.MonkeyPatch):
     def on_progress(progress: RowQuoteProgress):
         progress_snapshots.append(progress)
 
-    def fake_maas(rows, _quote_context, mapping_progress_callback=None):
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None, cancel_check=None):
         if callable(mapping_progress_callback):
             mapping_progress_callback(len(rows), len(rows))
         return {}
@@ -1019,7 +1020,7 @@ def test_pipeline_dual_progress(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_pipeline_batch_failure_uses_fallback(monkeypatch: pytest.MonkeyPatch):
-    def fake_maas(rows, _quote_context, mapping_progress_callback=None):
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None, cancel_check=None):
         if callable(mapping_progress_callback):
             mapping_progress_callback(len(rows), len(rows))
         return {}
@@ -1034,7 +1035,7 @@ def test_pipeline_batch_failure_uses_fallback(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_pipeline_summary_matches_serial(monkeypatch: pytest.MonkeyPatch):
-    def fake_maas(rows, _quote_context, mapping_progress_callback=None):
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None, cancel_check=None):
         if callable(mapping_progress_callback):
             mapping_progress_callback(len(rows), len(rows))
         return {}
@@ -1046,3 +1047,178 @@ def test_pipeline_summary_matches_serial(monkeypatch: pytest.MonkeyPatch):
     )
     assert summary.total_rows == 9
     assert summary.quoted_rows + summary.missing_price_rows + summary.manual_review_rows + summary.non_quote_rows == 9
+
+
+# ── Cancel behaviour tests ──────────────────────────────────────────────────
+
+from app.row_quote_workflow import TaskCancelledError
+from app.row_quote_tasks import (
+    cancel_annotation_task,
+    create_annotation_task,
+    get_annotation_task,
+    get_annotation_workbook,
+    _tasks,
+    _lock,
+)
+
+
+def _clear_tasks():
+    with _lock:
+        _tasks.clear()
+
+
+def test_cancel_queued_or_running_task():
+    _clear_tasks()
+    created = create_annotation_task(
+        {"filename": "test.xlsx", "content": _make_simple_workbook_rows(3)},
+        {"region": "mexico", "language": "es", "customer_notes": "test"},
+    )
+    task_id = created.task_id
+    resp = cancel_annotation_task(task_id)
+    assert resp.status in ("queued", "running", "cancelled")
+    with _lock:
+        assert _tasks[task_id]["cancelled"] is True
+    _clear_tasks()
+
+
+def test_cancel_check_stops_workflow_after_collect_rows(monkeypatch: pytest.MonkeyPatch):
+    cancel_flag = False
+
+    def cancel_check():
+        return cancel_flag
+
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None, cancel_check=None):
+        raise AssertionError("MaaS mapping should not be reached after cancel")
+
+    monkeypatch.setattr("app.row_quote_workflow._maas_map_rows", fake_maas)
+
+    # Cancel after collect_rows by using a cancel_check that becomes True
+    # We use a mutable flag so we can flip it mid-run
+    cancel_flag = True
+    with pytest.raises(TaskCancelledError):
+        annotate_row_quote_workbook(
+            {"filename": "test.xlsx", "content": _make_simple_workbook_rows(3)},
+            {"region": "mexico", "language": "es", "customer_notes": ""},
+            cancel_check=cancel_check,
+        )
+
+
+def test_cancel_check_stops_workflow_during_mapping(monkeypatch: pytest.MonkeyPatch):
+    call_count = 0
+
+    def cancel_check():
+        return call_count >= 1
+
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None, cancel_check=None):
+        nonlocal call_count
+        call_count += 1
+        if callable(mapping_progress_callback):
+            mapping_progress_callback(len(rows), len(rows))
+        return {}
+
+    monkeypatch.setattr("app.row_quote_workflow._maas_map_rows", fake_maas)
+    # cancel_check returns False initially (call_count=0), then True after first call
+    # But fake_maas doesn't check cancel_check — the workflow checkpoints after
+    # _maas_map_rows will catch it. This test verifies the post-mapping checkpoint.
+    with pytest.raises(TaskCancelledError):
+        annotate_row_quote_workbook(
+            {"filename": "test.xlsx", "content": _make_simple_workbook_rows(3)},
+            {"region": "mexico", "language": "es", "customer_notes": ""},
+            cancel_check=cancel_check,
+        )
+
+
+def test_cancel_check_stops_pricing_rows(monkeypatch: pytest.MonkeyPatch):
+    priced = 0
+
+    def cancel_check():
+        return priced >= 1
+
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None, cancel_check=None):
+        if callable(mapping_progress_callback):
+            mapping_progress_callback(len(rows), len(rows))
+        return {}
+
+    monkeypatch.setattr("app.row_quote_workflow._maas_map_rows", fake_maas)
+
+    original_price_row = app.row_quote_workflow._price_row
+
+    def tracking_price_row(mapping, row, quote_context):
+        nonlocal priced
+        result = original_price_row(mapping, row, quote_context)
+        priced += 1
+        return result
+
+    monkeypatch.setattr("app.row_quote_workflow._price_row", tracking_price_row)
+
+    with pytest.raises(TaskCancelledError):
+        annotate_row_quote_workbook(
+            {"filename": "test.xlsx", "content": _make_simple_workbook_rows(5)},
+            {"region": "mexico", "language": "es", "customer_notes": ""},
+            cancel_check=cancel_check,
+        )
+    # At least one row was priced before cancel stopped further processing
+    assert priced >= 1
+
+
+def test_cancel_sets_cancelled_status_not_failed(monkeypatch: pytest.MonkeyPatch):
+    _clear_tasks()
+
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None, cancel_check=None):
+        if callable(mapping_progress_callback):
+            mapping_progress_callback(len(rows), len(rows))
+        return {}
+
+    monkeypatch.setattr("app.row_quote_workflow._maas_map_rows", fake_maas)
+
+    created = create_annotation_task(
+        {"filename": "test.xlsx", "content": _make_simple_workbook_rows(3)},
+        {"region": "mexico", "language": "es", "customer_notes": "test"},
+    )
+    task_id = created.task_id
+
+    # Cancel the task
+    cancel_annotation_task(task_id)
+
+    # Wait for the worker thread to pick up the cancellation
+    for _ in range(30):
+        time.sleep(0.1)
+        resp = get_annotation_task(task_id)
+        if resp.status in ("cancelled", "failed"):
+            break
+
+    assert resp.status == "cancelled"
+    assert resp.current_stage == "cancelled"
+    assert resp.error is None
+    _clear_tasks()
+
+
+def test_cancelled_task_export_returns_409(monkeypatch: pytest.MonkeyPatch):
+    _clear_tasks()
+
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None, cancel_check=None):
+        if callable(mapping_progress_callback):
+            mapping_progress_callback(len(rows), len(rows))
+        return {}
+
+    monkeypatch.setattr("app.row_quote_workflow._maas_map_rows", fake_maas)
+
+    created = create_annotation_task(
+        {"filename": "test.xlsx", "content": _make_simple_workbook_rows(3)},
+        {"region": "mexico", "language": "es", "customer_notes": "test"},
+    )
+    task_id = created.task_id
+
+    cancel_annotation_task(task_id)
+
+    # Wait for cancelled status
+    for _ in range(30):
+        time.sleep(0.1)
+        resp = get_annotation_task(task_id)
+        if resp.status == "cancelled":
+            break
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_annotation_workbook(task_id)
+    assert exc_info.value.status_code == 409
+    _clear_tasks()
