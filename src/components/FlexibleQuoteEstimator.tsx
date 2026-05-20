@@ -64,6 +64,7 @@ const regionNames: Record<PricingRegionKey, string> = {
 const defaultNotes: Record<string, string> = {
   es: "Genere una cotización de Huawei Cloud para una pyme. Priorice opciones simples y costo-efectivas para LATAM, mantenga el mapeo práctico y marque las filas ambiguas para revisión manual.",
   en: "Please generate a Huawei Cloud quote for SMB use. Prefer simple, cost-effective options for LATAM, keep the mapping practical, and mark unclear rows for manual review.",
+  zh: "请为 SMB 场景生成华为云报价，优先选择适合拉美区域的简单、成本友好方案，映射尽量务实，不明确的行标记为人工确认。",
 };
 
 const uiCopy = {
@@ -147,6 +148,46 @@ const uiCopy = {
     cancel: "Cancel",
     cancelFailed: "Failed to cancel the task.",
   },
+  zh: {
+    title: "Flexible 报价",
+    body: "上传客户 Excel 工作簿。结果会保留原始工作簿，并在每个工作表末尾追加华为云报价列。",
+    upload: "上传 Excel",
+    preview: "分析行内容",
+    export: "导出 Excel",
+    context: "上下文",
+    region: "区域",
+    notesLabel: "AI 报价辅助提示",
+    notesHint: "请修改下面的提示，指导 AI 进行报价。",
+    notesRequired: "请先输入 AI 报价辅助提示，再开始分析。",
+    summary: "行汇总",
+    progress: "进度",
+    file: "文件",
+    taskStatus: "状态",
+    currentStage: "当前阶段",
+    previewFailed: "分析失败",
+    taskMissing: "任务不存在，或服务已经重启。",
+    idle: "请上传一个 .xlsx 文件开始。",
+    ready: "文件已准备好，可开始分析。",
+    previewQueued: "任务排队中...",
+    previewRunning: "正在分析行内容...",
+    exporting: "正在生成标注后的工作簿...",
+    success: "标注工作簿已可导出。",
+    invalidFile: "行级 Flexible 报价仅支持 .xlsx 文件。",
+    summaryWaiting: "分析完成后会显示汇总。",
+    totalRows: "总行数",
+    quotedRows: "已报价",
+    unmatchedRows: "未匹配",
+    missingPriceRows: "缺少价格",
+    manualRows: "人工确认",
+    nonQuoteRows: "非报价行",
+    ondemand: "按需",
+    monthly: "包月",
+    ri: "RI 1Y",
+    progressLabelMapRows: "已映射/总计",
+    progressLabelPriceRows: "已报价/总计",
+    cancel: "取消",
+    cancelFailed: "取消任务失败。",
+  },
 } satisfies Record<string, Record<string, string>>;
 
 function money(value?: number | null, currency = "USD") {
@@ -186,6 +227,7 @@ function statusText(state: PreviewViewState, t: Record<string, string>) {
 
 function stageLabel(stage?: string | null) {
   if (!stage) return "-";
+  if (stage === "queued") return "Queued";
   if (stage === "collect_rows") return "Collect Rows";
   if (stage === "pipeline_rows") return "Pipeline";
   if (stage === "map_rows") return "Map Rows";

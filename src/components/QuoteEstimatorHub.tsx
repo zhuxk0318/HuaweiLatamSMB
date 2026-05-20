@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { trackClick } from "../analytics";
 import type { Lang } from "../data/i18n";
 import { FlexibleQuoteEstimator } from "./FlexibleQuoteEstimator";
@@ -17,11 +17,28 @@ const uiCopy = {
     rvtools: "RVTools Quote",
     flexible: "Flexible Quote",
   },
+  zh: {
+    title: "报价模式",
+    rvtools: "RVTools 报价",
+    flexible: "Flexible 报价",
+  },
 } satisfies Record<Lang, Record<string, string>>;
 
 export function QuoteEstimatorHub({ lang }: { lang: Lang }) {
   const t = uiCopy[lang];
   const [mode, setMode] = useState<QuoteMode>("rvtools");
+
+  useEffect(() => {
+    const syncMode = () => {
+      const hash = window.location.hash;
+      const query = hash.match(/^#\/estimator\?(.+)$/)?.[1];
+      const nextMode = new URLSearchParams(query ?? "").get("mode");
+      setMode(nextMode === "flexible" ? "flexible" : "rvtools");
+    };
+    syncMode();
+    window.addEventListener("hashchange", syncMode);
+    return () => window.removeEventListener("hashchange", syncMode);
+  }, []);
 
   return (
     <section className="pricing-section">

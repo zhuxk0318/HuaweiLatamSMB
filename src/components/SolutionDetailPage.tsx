@@ -48,6 +48,25 @@ const labels = {
     estimator: "Open cloud estimator",
     overview: "Browse all scenarios",
   },
+  zh: {
+    back: "返回方案手册",
+    missing: "未找到方案场景",
+    missingBody: "请返回方案手册并选择可用场景。",
+    targetCustomers: "目标客户",
+    painPoints: "客户痛点",
+    solutionApproach: "方案路径",
+    services: "推荐能力",
+    demoSkills: "Demo 与 GitHub Skill",
+    quickIntegration: "快速集成",
+    prerequisites: "前提条件",
+    steps: "集成步骤",
+    configuration: "配置说明",
+    apiAccess: "API 与接入模式",
+    salesTalkTrack: "销售沟通问题",
+    expectedOutcomes: "预期结果",
+    estimator: "打开云报价器",
+    overview: "浏览全部场景",
+  },
 } satisfies Record<Lang, Record<string, string>>;
 
 function textList(lang: Lang, items: LocalizedPair[]) {

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import JSONResponse, Response
+from fastapi import Body, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from app.chat_service import create_chat_session, get_chat_session, register_uploads, stream_chat
 from app.flexible_preview_tasks import create_preview_task, get_preview_task
+from app.hld_tasks import create_hld_design_task, get_hld_design_artifact, get_hld_design_task
+from app.hld_recommend import get_recommendation
 from app.flexible_pricing import query_flexible_pricing_catalog
 from app.flexible_workflow import (
     build_flexible_preview_response,
@@ -18,6 +21,15 @@ from app.models import (
     FlexiblePreviewTaskResponse,
     FlexibleQuotePreviewResponse,
     FlexibleReviewRequest,
+    ChatMessageRequest,
+    ChatSessionCreatedResponse,
+    ChatSessionResponse,
+    ChatUploadResponse,
+    HldDesignTaskCreatedResponse,
+    HldDesignTaskResponse,
+    HldRecommendationRequest,
+    HldRecommendationResponse,
+    HldRequirements,
     QuotePreviewResponse,
     QuoteRequest,
     RowQuoteTaskCreatedResponse,
@@ -42,6 +54,46 @@ def get_flexible_pricing_catalog(
 ) -> FlexibleCatalogResponse:
     items = query_flexible_pricing_catalog(product=product, region=region)
     return FlexibleCatalogResponse(items=items)
+
+
+@app.post("/api/chat/sessions", response_model=ChatSessionCreatedResponse)
+def create_chat_portal_session() -> ChatSessionCreatedResponse:
+    return create_chat_session()
+
+
+@app.get("/api/chat/sessions/{session_id}", response_model=ChatSessionResponse)
+def get_chat_portal_session(session_id: str) -> ChatSessionResponse:
+    session = get_chat_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat session not found.")
+    return session
+
+
+@app.post("/api/chat/uploads", response_model=ChatUploadResponse)
+def upload_chat_files(files: list[UploadFile] = File(...)) -> ChatUploadResponse:
+    uploads = _read_flexible_files(files)
+    for index, upload in enumerate(files):
+        uploads[index]["media_type"] = upload.content_type
+    return register_uploads(uploads)
+
+
+@app.post("/api/chat/sessions/{session_id}/messages/stream")
+def stream_chat_portal_message(
+    session_id: str,
+    request: ChatMessageRequest = Body(...),
+) -> StreamingResponse:
+    if get_chat_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="Chat session not found.")
+    stream = stream_chat(session_id, request)
+    return StreamingResponse(
+        stream,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/api/quotes/export")
@@ -248,4 +300,42 @@ def export_flexible_quote(request: FlexibleReviewRequest) -> Response:
         content=workbook.content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{workbook.filename}"'},
+    )
+
+
+# --- HLD Design endpoints ---
+
+
+@app.post("/api/hld/designs/recommendations", response_model=HldRecommendationResponse)
+def hld_recommendation(request: HldRecommendationRequest) -> HldRecommendationResponse:
+    return get_recommendation(request)
+
+
+@app.post("/api/hld/designs", response_model=HldDesignTaskCreatedResponse)
+def create_hld_design(requirements: HldRequirements) -> HldDesignTaskCreatedResponse:
+    return create_hld_design_task(requirements)
+
+
+@app.get("/api/hld/designs/{design_id}", response_model=HldDesignTaskResponse)
+def get_hld_design(design_id: str) -> HldDesignTaskResponse:
+    return get_hld_design_task(design_id)
+
+
+@app.get("/api/hld/designs/{design_id}/artifacts/png")
+def download_hld_design_png(design_id: str) -> Response:
+    content, media_type, filename = get_hld_design_artifact(design_id, "png")
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/hld/designs/{design_id}/artifacts/drawio")
+def download_hld_design_drawio(design_id: str) -> Response:
+    content, media_type, filename = get_hld_design_artifact(design_id, "drawio")
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

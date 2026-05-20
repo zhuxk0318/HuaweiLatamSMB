@@ -35,6 +35,19 @@ const labels = {
     metricImprovement: "Improvement",
     metricValue: "Value",
   },
+  zh: {
+    back: "返回方案手册",
+    overview: "方案概览",
+    keyValue: "关键价值与可衡量提升",
+    modules: "方案模块与临床流程",
+    architecture: "架构与基础设施",
+    products: "华为产品基础",
+    outcomes: "客户结果",
+    cta: "申请方案咨询",
+    browseAll: "浏览全部方案",
+    metricImprovement: "提升项",
+    metricValue: "结果",
+  },
 } satisfies Record<Lang, Record<string, string>>;
 
 interface HealthcareContent {

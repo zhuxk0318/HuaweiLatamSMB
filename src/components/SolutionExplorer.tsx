@@ -41,6 +41,18 @@ const labels = {
     openOfficial: "Open official solution",
     externalBadge: "External link",
   },
+  zh: {
+    kicker: "方案手册",
+    title: "从业务需求出发，用可直接落地的场景推进交付。",
+    body:
+      "浏览适合 SMB 的 AI 与云方案，结合场景说明、GitHub 技能和快速集成路径。",
+    allScenarios: "该方案域中的场景",
+    viewSolution: "查看方案",
+    viewSkill: "查看 demo / skill",
+    quickIntegration: "快速集成",
+    openOfficial: "打开官方方案",
+    externalBadge: "外部链接",
+  },
 } satisfies Record<
   Lang,
   {
@@ -272,7 +284,7 @@ export function SolutionExplorer({ lang, initialEntryId }: SolutionExplorerProps
       <section className="scenario-section">
         <div className="section-heading">
           <span className="section-kicker">
-            {orderedScenarios.length} {lang === "es" ? "escenarios" : "scenarios"}
+            {orderedScenarios.length} {lang === "es" ? "escenarios" : lang === "zh" ? "个场景" : "scenarios"}
           </span>
           <h3>{textFor(lang, activeEntry.title)}</h3>
           <p>{l.allScenarios}</p>

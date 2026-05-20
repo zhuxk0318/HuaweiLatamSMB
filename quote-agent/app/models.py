@@ -397,3 +397,152 @@ class RowQuoteTaskResponse(BaseModel):
     created_at: str
     updated_at: str
     finished_at: str | None = None
+
+
+ChatRole = Literal["user", "assistant"]
+ChatBlockType = Literal["text", "solution_card", "pricing_card", "source_link"]
+ChatSessionStatus = Literal["active"]
+ChatStreamEventType = Literal["message_start", "message_delta", "message_block", "message_end", "error"]
+
+
+class ChatUploadedFile(BaseModel):
+    file_id: str
+    filename: str
+    size_bytes: int
+    media_type: str | None = None
+    created_at: str
+
+
+class ChatUploadResponse(BaseModel):
+    files: list[ChatUploadedFile] = Field(default_factory=list)
+
+
+class ChatCardAction(BaseModel):
+    label: str
+    action_type: Literal["open_route", "open_upload", "suggest_prompt"]
+    target: str
+
+
+class ChatMessageBlock(BaseModel):
+    block_type: ChatBlockType
+    title: str | None = None
+    body: str | None = None
+    route: str | None = None
+    image_url: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    action: ChatCardAction | None = None
+
+
+class ChatMessage(BaseModel):
+    message_id: str
+    role: ChatRole
+    text: str = ""
+    blocks: list[ChatMessageBlock] = Field(default_factory=list)
+    created_at: str
+
+
+class ChatSessionResponse(BaseModel):
+    session_id: str
+    status: ChatSessionStatus = "active"
+    messages: list[ChatMessage] = Field(default_factory=list)
+    created_at: str
+    updated_at: str
+
+
+class ChatSessionCreatedResponse(BaseModel):
+    session_id: str
+    status: ChatSessionStatus = "active"
+    created_at: str
+
+
+class ChatMessageRequest(BaseModel):
+    message: str
+    language: LangKey = "en"
+    file_ids: list[str] = Field(default_factory=list)
+    web_search_enabled: bool = False
+
+
+class ChatStreamEvent(BaseModel):
+    event: ChatStreamEventType
+    session_id: str
+    message_id: str | None = None
+    delta: str | None = None
+    block: ChatMessageBlock | None = None
+    error: str | None = None
+
+
+# --- HLD Design models ---
+
+HldDesignTaskStatus = Literal["queued", "running", "succeeded", "failed"]
+
+HldDeploymentMode = Literal["on-prem", "cloud", "hybrid"]
+
+HldDesignBias = Literal["huawei"]
+
+
+class HldRequirements(BaseModel):
+    project_name: str
+    business_goal: str
+    architecture_boundary: str
+    deployment_mode: HldDeploymentMode
+    user_access_entry: str
+    core_components: str
+    external_integrations: str
+    data_stores_flow: str
+    network_security_boundary: str
+    preferred_filename: str | None = None
+    language: LangKey = "en"
+    design_bias: HldDesignBias = "huawei"
+
+
+class HldDesignTaskCreatedResponse(BaseModel):
+    design_id: str
+    status: HldDesignTaskStatus
+
+
+class HldDesignTaskError(BaseModel):
+    message: str
+    detail: str | None = None
+    last_stage: str | None = None
+
+
+class HldDesignTaskResponse(BaseModel):
+    design_id: str
+    status: HldDesignTaskStatus
+    current_stage: str | None = None
+    error: HldDesignTaskError | None = None
+    output_basename: str | None = None
+    created_at: str
+    updated_at: str
+    finished_at: str | None = None
+
+
+# --- HLD Recommendation models ---
+
+HldWizardStep = Literal[
+    "project_name",
+    "business_goal",
+    "architecture_boundary",
+    "deployment_mode",
+    "user_access_entry",
+    "core_components",
+    "external_integrations",
+    "data_stores_flow",
+    "network_security_boundary",
+    "preferred_filename",
+]
+
+HldRecommendationSource = Literal["static", "rule", "llm", "fallback_default"]
+
+
+class HldRecommendationRequest(BaseModel):
+    step: HldWizardStep
+    answers: dict[str, str] = Field(default_factory=dict)
+    language: LangKey = "en"
+
+
+class HldRecommendationResponse(BaseModel):
+    recommended_answer: str
+    source: HldRecommendationSource = "fallback_default"
+    reasoning_summary: str | None = None
+    answer_options: list[str] = Field(default_factory=list)

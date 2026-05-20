@@ -5,6 +5,8 @@ import {
   Calculator,
   Layers3,
 } from "lucide-react";
+import { ChatPortal } from "./components/ChatPortal";
+import { MigrationExplorer } from "./components/MigrationExplorer";
 import { QuoteEstimatorHub } from "./components/QuoteEstimatorHub";
 import { SolutionDetailPage } from "./components/SolutionDetailPage";
 import { SolutionExplorer, getValidSolutionEntry } from "./components/SolutionExplorer";
@@ -12,16 +14,22 @@ import { initAnalytics, trackClick, trackPageView } from "./analytics";
 import { copy, type Lang } from "./data/i18n";
 import { solutionEntries, solutionEntryCards, textFor } from "./data/solutions";
 
-type Route = "home" | "estimator" | "solutionsIndex" | "solution";
+type Route = "home" | "estimator" | "solutionsIndex" | "solution" | "migration" | "hld";
 
 function getInitialLang(): Lang {
   const stored = window.localStorage.getItem("huawei-latam-smb-lang");
-  return stored === "en" ? stored : "es";
+  return stored === "en" || stored === "zh" ? stored : "es";
 }
 
 function getRoute(): Route {
   if (window.location.hash.startsWith("#/estimator")) {
     return "estimator";
+  }
+  if (window.location.hash.startsWith("#/migration")) {
+    return "migration";
+  }
+  if (window.location.hash.startsWith("#/hld")) {
+    return "hld";
   }
   if (window.location.hash.startsWith("#/solutions/")) {
     return "solution";
@@ -47,7 +55,7 @@ function getSolutionsEntryId() {
 }
 
 function scrollForRoute(route: Route) {
-  if (route === "estimator" || route === "solution" || route === "solutionsIndex") {
+  if (route === "estimator" || route === "solution" || route === "solutionsIndex" || route === "migration") {
     window.scrollTo({ top: 0 });
     return;
   }
@@ -77,6 +85,13 @@ const estimatorCta = {
     body:
       "Use the estimator as a separate tool to review regions, cached pricing, and monthly estimates before a cloud migration.",
     action: "Open estimator",
+  },
+  zh: {
+    kicker: "云报价器",
+    title: "基于 RVTools 估算 ECS 与 EVS",
+    body:
+      "将报价器作为独立工具使用，在云迁移前查看区域、本地缓存价格和月度估算结果。",
+    action: "打开报价器",
   },
 } satisfies Record<Lang, { kicker: string; title: string; body: string; action: string }>;
 
@@ -230,6 +245,19 @@ function SiteHeader({
           {t.nav.solutions}
         </a>
         <a
+          className={route === "migration" ? "nav-active" : ""}
+          href="#/migration"
+          onClick={() =>
+            trackClick({
+              click_target: "nav_migration",
+              click_section: "header",
+              destination: "#/migration",
+            })
+          }
+        >
+          Migration
+        </a>
+        <a
           className={route === "estimator" ? "nav-active" : ""}
           href="#/estimator"
           onClick={() =>
@@ -241,6 +269,19 @@ function SiteHeader({
           }
         >
           {t.nav.quote}
+        </a>
+        <a
+          className={route === "hld" ? "nav-active" : ""}
+          href="#/hld"
+          onClick={() =>
+            trackClick({
+              click_target: "nav_hld",
+              click_section: "header",
+              destination: "#/hld",
+            })
+          }
+        >
+          HLD Design
         </a>
       </nav>
       <div className="language-toggle" aria-label="Language">
@@ -271,6 +312,20 @@ function SiteHeader({
           }}
         >
           EN
+        </button>
+        <button
+          type="button"
+          className={lang === "zh" ? "active" : ""}
+          onClick={() => {
+            trackClick({
+              click_target: "language_zh",
+              click_section: "header",
+              destination: "zh",
+            });
+            setLang("zh");
+          }}
+        >
+          中
         </button>
       </div>
     </header>
@@ -557,6 +612,16 @@ function EstimatorPage({ lang }: { lang: Lang }) {
   );
 }
 
+function MigrationPage({ lang }: { lang: Lang }) {
+  return (
+    <main id="top" className="migration-page">
+      <section className="content-section">
+        <MigrationExplorer lang={lang} />
+      </section>
+    </main>
+  );
+}
+
 function App() {
   const [lang, setLang] = useState<Lang>(getInitialLang);
   const [route, setRoute] = useState<Route>(getRoute);
@@ -592,7 +657,9 @@ function App() {
           ? "Huawei LATAM - Solution Playbook"
         : route === "solution"
           ? "Huawei LATAM - Solution Detail"
-          : "Huawei LATAM - SMB Solutions";
+        : route === "migration"
+          ? "Huawei LATAM - Migration & Modernization"
+          : "Huawei LATAM - SMB Advisor";
   }, [route, solutionId]);
 
   useEffect(() => {
@@ -605,17 +672,25 @@ function App() {
 
   return (
     <div className="site-shell">
-      <SiteHeader lang={lang} route={route} setLang={setLang} />
-      {route === "estimator" ? (
-        <EstimatorPage lang={lang} />
-      ) : route === "solution" ? (
-        <SolutionDetailPage lang={lang} solutionId={solutionId} />
-      ) : route === "solutionsIndex" ? (
-        <SolutionsIndexPage lang={lang} />
+      {route === "home" || route === "hld" ? (
+        <ChatPortal lang={lang} setLang={setLang} />
       ) : (
-        <HomePage lang={lang} />
+        <>
+          <SiteHeader lang={lang} route={route} setLang={setLang} />
+          {route === "estimator" ? (
+            <EstimatorPage lang={lang} />
+          ) : route === "migration" ? (
+            <MigrationPage lang={lang} />
+          ) : route === "solution" ? (
+            <SolutionDetailPage lang={lang} solutionId={solutionId} />
+          ) : route === "solutionsIndex" ? (
+            <SolutionsIndexPage lang={lang} />
+          ) : (
+            <HomePage lang={lang} />
+          )}
+          <SiteFooter />
+        </>
       )}
-      <SiteFooter />
     </div>
   );
 }

@@ -1,0 +1,809 @@
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent, KeyboardEvent } from "react";
+import {
+  ArrowUp,
+  Calculator,
+  FileUp,
+  Layers3,
+  LayoutDashboard,
+  LoaderCircle,
+  MessageSquarePlus,
+  Paperclip,
+  SquareArrowOutUpRight,
+  X,
+} from "lucide-react";
+import { trackClick } from "../analytics";
+import type { Lang } from "../data/i18n";
+import { HldDesignWizard } from "./HldDesignWizard";
+import type { HldRequirements } from "./HldDesignWizard";
+import { HldDesignResultCard } from "./HldDesignResultCard";
+
+const API_BASE_URL = (import.meta.env.VITE_QUOTE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "/quote-api";
+
+type UploadedFile = {
+  file_id: string;
+  filename: string;
+  size_bytes: number;
+  media_type?: string | null;
+  created_at: string;
+};
+
+type ChatCardAction = {
+  label: string;
+  action_type: "open_route" | "open_upload" | "suggest_prompt";
+  target: string;
+};
+
+type ChatMessageBlock = {
+  block_type: "text" | "solution_card" | "pricing_card" | "source_link";
+  title?: string | null;
+  body?: string | null;
+  route?: string | null;
+  image_url?: string | null;
+  tags: string[];
+  action?: ChatCardAction | null;
+};
+
+type ChatMessage = {
+  message_id: string;
+  role: "user" | "assistant";
+  text: string;
+  blocks: ChatMessageBlock[];
+  created_at: string;
+};
+
+type ChatSessionCreatedResponse = {
+  session_id: string;
+  status: "active";
+  created_at: string;
+};
+
+type ChatSessionResponse = {
+  session_id: string;
+  status: "active";
+  messages: ChatMessage[];
+  created_at: string;
+  updated_at: string;
+};
+
+type ChatUploadResponse = {
+  files: UploadedFile[];
+};
+
+type ChatStreamEvent = {
+  event: "message_start" | "message_delta" | "message_block" | "message_end" | "error";
+  session_id: string;
+  message_id?: string | null;
+  delta?: string | null;
+  block?: ChatMessageBlock | null;
+  error?: string | null;
+};
+
+const copy = {
+  en: {
+    productName: "Huawei LATAM SMB Advisor",
+    welcomePrompt: "Where shall we start?",
+    capabilityChips: ["Solutions", "Pricing", "Cloud Adoption"],
+    placeholder: "Ask about SMB solutions, pricing, migration, healthcare, or upload a file for quotation guidance...",
+    send: "Send",
+    newChat: "New conversation",
+    upload: "Upload files",
+    uploading: "Uploading...",
+    uploads: "Attached files",
+    removeFile: "Remove file",
+    errorSession: "Unable to initialize the conversation.",
+    errorStream: "Unable to get a response from the assistant.",
+    assistant: "Assistant",
+    user: "You",
+    open: "Open",
+    askThis: "Ask this",
+    fileReceived: "File uploaded and ready to reference in the conversation.",
+    streaming: "Responding...",
+    webSearch: "Web Search",
+  },
+  es: {
+    productName: "Huawei LATAM SMB Advisor",
+    welcomePrompt: "¿Por dónde empezamos?",
+    capabilityChips: ["Soluciones", "Cotización", "Cloud Adoption"],
+    placeholder: "Pregunte por soluciones SMB, precios, migración, salud o cargue un archivo para guía de cotización...",
+    send: "Enviar",
+    newChat: "Nueva conversación",
+    upload: "Cargar archivos",
+    uploading: "Cargando...",
+    uploads: "Archivos adjuntos",
+    removeFile: "Quitar archivo",
+    errorSession: "No fue posible inicializar la conversación.",
+    errorStream: "No fue posible obtener respuesta del asistente.",
+    assistant: "Asistente",
+    user: "Usted",
+    open: "Abrir",
+    askThis: "Preguntar esto",
+    fileReceived: "Archivo cargado y listo para referenciar en la conversación.",
+    streaming: "Respondiendo...",
+    webSearch: "Búsqueda web",
+  },
+  zh: {
+    productName: "Huawei LATAM SMB Advisor",
+    welcomePrompt: "我们先从哪里开始？",
+    capabilityChips: ["解决方案", "报价", "Cloud Adoption"],
+    placeholder: "请输入 SMB 方案、报价、迁移、医疗或上传文件后的咨询内容...",
+    send: "发送",
+    newChat: "新对话",
+    upload: "上传文件",
+    uploading: "上传中...",
+    uploads: "已附加文件",
+    removeFile: "移除文件",
+    errorSession: "初始化对话失败。",
+    errorStream: "暂时无法获取助手回复。",
+    assistant: "助手",
+    user: "你",
+    open: "打开",
+    askThis: "继续追问",
+    fileReceived: "文件已上传，可在当前对话中引用。",
+    streaming: "正在回复...",
+    webSearch: "联网搜索",
+  },
+} satisfies Record<Lang, {
+  productName: string;
+  welcomePrompt: string;
+  capabilityChips: string[];
+  placeholder: string;
+  send: string;
+  newChat: string;
+  upload: string;
+  uploading: string;
+  uploads: string;
+  removeFile: string;
+  errorSession: string;
+  errorStream: string;
+  assistant: string;
+  user: string;
+  open: string;
+  askThis: string;
+  fileReceived: string;
+  streaming: string;
+  webSearch: string;
+}>;
+
+type PortalMessage = ChatMessage & {
+  pending?: boolean;
+};
+
+const hldCopy: Record<Lang, { generating: string; back: string; retry: string; editAnswers: string }> = {
+  en: { generating: "Generating HLD diagram…", back: "Back", retry: "Retry generation", editAnswers: "Edit answers" },
+  es: { generating: "Generando diagrama HLD…", back: "Volver", retry: "Reintentar generación", editAnswers: "Editar respuestas" },
+  zh: { generating: "正在生成 HLD 图…", back: "返回", retry: "重试生成", editAnswers: "修改答案" },
+};
+
+const capabilityEntries = [
+  {
+    key: "pricing",
+    label: "Pricing",
+    description: { en: "Estimate cloud costs from RVTools or requirements", es: "Estime costos cloud desde RVTools o requerimientos", zh: "基于 RVTools 或需求估算云成本" },
+    href: "#/estimator",
+    icon: Calculator,
+  },
+  {
+    key: "solution",
+    label: "Solution",
+    description: { en: "Browse AI and cloud solution scenarios", es: "Explore escenarios de soluciones AI y cloud", zh: "浏览 AI 与云方案场景" },
+    href: "#/solutions",
+    icon: Layers3,
+  },
+  {
+    key: "migration",
+    label: "Migration",
+    description: { en: "Migration and modernization paths", es: "Rutas de migración y modernización", zh: "迁移与现代化路径" },
+    href: "#/migration",
+    icon: ArrowUp,
+  },
+  {
+    key: "hld",
+    label: "HLD Design",
+    description: { en: "Generate high-level architecture diagrams", es: "Genere diagramas de arquitectura de alto nivel", zh: "生成高层架构设计图" },
+    href: "#/hld",
+    icon: LayoutDashboard,
+  },
+] as const;
+
+const headerNavItems = [
+  { label: "Pricing", href: "#/estimator" },
+  { label: "Solution", href: "#/solutions" },
+  { label: "Migration", href: "#/migration" },
+  { label: "HLD Design", href: "#/hld" },
+];
+
+function createLocalMessageId(prefix: string) {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return `${prefix}-${globalThis.crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang) => void }) {
+  const t = copy[lang];
+  const [sessionId, setSessionId] = useState("");
+  const [messages, setMessages] = useState<PortalMessage[]>([]);
+  const [composer, setComposer] = useState("");
+  const [uploads, setUploads] = useState<UploadedFile[]>([]);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [streaming, setStreaming] = useState(false);
+  const [error, setError] = useState("");
+  const [bootstrapping, setBootstrapping] = useState(true);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const messageListRef = useRef<HTMLDivElement | null>(null);
+  const transcriptEndRef = useRef<HTMLDivElement | null>(null);
+  const assistantMessageIdRef = useRef<string | null>(null);
+  const shouldAutoScrollRef = useRef(true);
+
+  // HLD mode state
+  const [hldMode, setHldMode] = useState(false);
+  const [hldDesignId, setHldDesignId] = useState("");
+  const [hldPolling, setHldPolling] = useState(false);
+  const [hldPngUrl, setHldPngUrl] = useState("");
+  const [hldFilename, setHldFilename] = useState("");
+  const [hldError, setHldError] = useState("");
+  const [hldGeneratedAt, setHldGeneratedAt] = useState("");
+  const [hldLastRequirements, setHldLastRequirements] = useState<HldRequirements | null>(null);
+  const hldPollTokenRef = useRef(0);
+
+  useEffect(() => {
+    void startNewConversation();
+  }, []);
+
+  useLayoutEffect(() => {
+    const container = messageListRef.current;
+    if (!container || !shouldAutoScrollRef.current) return;
+    window.requestAnimationFrame(() => {
+      container.scrollTop = container.scrollHeight;
+    });
+  }, [messages, streaming]);
+
+  // Auto-enter HLD mode from #/hld hash
+  useEffect(() => {
+    if (window.location.hash === "#/hld") {
+      setHldMode(true);
+    }
+  }, []);
+
+  // HLD submit handler
+  async function handleHldSubmit(requirements: HldRequirements) {
+    setHldLastRequirements(requirements);
+    setHldPolling(true);
+    setHldError("");
+    const token = ++hldPollTokenRef.current;
+    try {
+      const resp = await fetch(`${API_BASE_URL}/api/hld/designs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requirements),
+      });
+      if (!resp.ok) throw new Error("Failed to create HLD design task");
+      const payload = (await resp.json()) as { design_id: string; status: string };
+      setHldDesignId(payload.design_id);
+      pollHldDesign(payload.design_id, token);
+    } catch (err) {
+      setHldError(err instanceof Error ? err.message : "HLD submission failed");
+      setHldPolling(false);
+    }
+  }
+
+  function pollHldDesign(designId: string, token: number) {
+    if (token !== hldPollTokenRef.current) return;
+    fetch(`${API_BASE_URL}/api/hld/designs/${designId}`)
+      .then((resp) => {
+        if (!resp.ok) throw new Error("Poll failed");
+        return resp.json();
+      })
+      .then((data: { status: string; output_basename?: string; finished_at?: string; error?: { message?: string; last_stage?: string } }) => {
+        if (token !== hldPollTokenRef.current) return;
+        if (data.status === "queued" || data.status === "running") {
+          setTimeout(() => pollHldDesign(designId, token), 1000);
+          return;
+        }
+        if (data.status === "failed") {
+          const stage = data.error?.last_stage || "";
+          const detail = data.error?.message || "HLD generation failed.";
+          setHldError(stage ? `${detail} (stage: ${stage})` : detail);
+          setHldPolling(false);
+          return;
+        }
+        // succeeded — fetch PNG as blob URL for preview
+        setHldFilename(data.output_basename || "hld-design");
+        setHldGeneratedAt(data.finished_at || new Date().toISOString());
+        fetch(`${API_BASE_URL}/api/hld/designs/${designId}/artifacts/png`)
+          .then((r) => r.blob())
+          .then((blob) => {
+            if (token !== hldPollTokenRef.current) return;
+            setHldPngUrl(URL.createObjectURL(blob));
+            setHldPolling(false);
+          })
+          .catch(() => {
+            setHldError("Failed to load PNG preview");
+            setHldPolling(false);
+          });
+      })
+      .catch(() => {
+        if (token !== hldPollTokenRef.current) return;
+        setHldError("Polling failed");
+        setHldPolling(false);
+      });
+  }
+
+  function resetHldMode() {
+    ++hldPollTokenRef.current;
+    setHldMode(false);
+    setHldDesignId("");
+    setHldPolling(false);
+    setHldPngUrl("");
+    setHldFilename("");
+    setHldError("");
+    setHldGeneratedAt("");
+    setHldLastRequirements(null);
+    window.location.hash = "#/";
+  }
+
+  function startAnotherHld() {
+    ++hldPollTokenRef.current;
+    setHldDesignId("");
+    setHldPolling(false);
+    setHldPngUrl("");
+    setHldFilename("");
+    setHldError("");
+    setHldGeneratedAt("");
+    setHldLastRequirements(null);
+  }
+
+  function handleTranscriptScroll() {
+    const container = messageListRef.current;
+    if (!container) return;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    shouldAutoScrollRef.current = distanceFromBottom < 80;
+  }
+
+  async function startNewConversation() {
+    setBootstrapping(true);
+    setError("");
+    setMessages([]);
+    setUploads([]);
+    setComposer("");
+    assistantMessageIdRef.current = null;
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/chat/sessions`, { method: "POST" });
+      if (!response.ok) throw new Error(t.errorSession);
+      const payload = (await response.json()) as ChatSessionCreatedResponse;
+      setSessionId(payload.session_id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t.errorSession);
+    } finally {
+      setBootstrapping(false);
+    }
+  }
+
+  async function ensureSession() {
+    if (sessionId) return sessionId;
+    const response = await fetch(`${API_BASE_URL}/api/chat/sessions`, { method: "POST" });
+    if (!response.ok) throw new Error(t.errorSession);
+    const payload = (await response.json()) as ChatSessionCreatedResponse;
+    setSessionId(payload.session_id);
+    return payload.session_id;
+  }
+
+  async function onUploadChange(event: ChangeEvent<HTMLInputElement>) {
+    const selectedFiles = Array.from(event.target.files || []);
+    event.target.value = "";
+    if (selectedFiles.length === 0) return;
+    setUploading(true);
+    setError("");
+    try {
+      const formData = new FormData();
+      for (const file of selectedFiles) {
+        formData.append("files", file);
+      }
+      const response = await fetch(`${API_BASE_URL}/api/chat/uploads`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) throw new Error(t.errorStream);
+      const payload = (await response.json()) as ChatUploadResponse;
+      setUploads((current) => [...current, ...payload.files]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t.errorStream);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function removeUpload(fileId: string) {
+    setUploads((current) => current.filter((item) => item.file_id !== fileId));
+  }
+
+  async function sendMessage(promptOverride?: string) {
+    const text = (promptOverride ?? composer).trim();
+    if (!text || streaming || bootstrapping) return;
+
+    try {
+      const nextUserMessage: PortalMessage = {
+        message_id: createLocalMessageId("user"),
+        role: "user",
+        text,
+        blocks: [],
+        created_at: new Date().toISOString(),
+      };
+      setMessages((current) => [...current, nextUserMessage]);
+      setComposer("");
+      setError("");
+      setStreaming(true);
+
+      const activeSessionId = await ensureSession();
+      const response = await fetch(`${API_BASE_URL}/api/chat/sessions/${activeSessionId}/messages/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: text,
+          language: lang,
+          file_ids: uploads.map((item) => item.file_id),
+          web_search_enabled: webSearchEnabled,
+        }),
+      });
+      if (!response.ok || !response.body) throw new Error(t.errorStream);
+      await consumeEventStream(response.body);
+      setUploads([]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t.errorStream);
+    } finally {
+      setStreaming(false);
+      assistantMessageIdRef.current = null;
+    }
+  }
+
+  async function consumeEventStream(stream: ReadableStream<Uint8Array>) {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        handleEventFrame(frame);
+      }
+    }
+    if (buffer.trim()) {
+      handleEventFrame(buffer);
+    }
+  }
+
+  function handleEventFrame(frame: string) {
+    const lines = frame.split("\n");
+    let dataPayload = "";
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        dataPayload += line.slice(6);
+      }
+    }
+    if (!dataPayload) return;
+    const payload = JSON.parse(dataPayload) as ChatStreamEvent;
+
+    if (payload.event === "message_start" && payload.message_id) {
+      assistantMessageIdRef.current = payload.message_id;
+      setMessages((current) => [
+        ...current,
+        {
+          message_id: payload.message_id!,
+          role: "assistant",
+          text: "",
+          blocks: [],
+          created_at: new Date().toISOString(),
+          pending: true,
+        },
+      ]);
+      return;
+    }
+
+    if (payload.event === "message_delta" && payload.message_id && payload.delta) {
+      setMessages((current) =>
+        current.map((message) =>
+          message.message_id === payload.message_id
+            ? { ...message, text: `${message.text}${payload.delta}` }
+            : message,
+        ),
+      );
+      return;
+    }
+
+    if (payload.event === "message_block" && payload.message_id && payload.block) {
+      setMessages((current) =>
+        current.map((message) =>
+          message.message_id === payload.message_id
+            ? { ...message, blocks: [...message.blocks, payload.block!] }
+            : message,
+        ),
+      );
+      return;
+    }
+
+    if (payload.event === "message_end" && payload.message_id) {
+      setMessages((current) =>
+        current.map((message) =>
+          message.message_id === payload.message_id ? { ...message, pending: false } : message,
+        ),
+      );
+      return;
+    }
+
+    if (payload.event === "error" && payload.error) {
+      setError(payload.error);
+    }
+  }
+
+  function onComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void sendMessage();
+    }
+  }
+
+  function handleCardAction(block: ChatMessageBlock) {
+    const action = block.action;
+    if (!action) return;
+    if (action.action_type === "open_route") {
+      window.location.hash = action.target;
+      return;
+    }
+    if (action.action_type === "open_upload") {
+      fileInputRef.current?.click();
+      return;
+    }
+    if (action.action_type === "suggest_prompt") {
+      setComposer(action.target);
+    }
+  }
+
+  const welcomeVisible = useMemo(() => !hldMode && messages.length === 0, [hldMode, messages.length]);
+
+  return (
+    <main className="chat-portal-page">
+      <header className="chat-portal-header">
+        <div className="chat-portal-brand">
+          <img src="/assets/huawei/huawei-logo.png" alt="Huawei" />
+          <span>{t.productName}</span>
+        </div>
+        {!welcomeVisible && (
+          <nav className="chat-portal-nav" aria-label="Quick access">
+            {headerNavItems.map((item) => (
+              <a
+                key={item.label}
+                href={item.href}
+                onClick={() =>
+                  trackClick({ click_target: `chat_nav_${item.label.toLowerCase()}`, click_section: "chat_header", destination: item.href })
+                }
+              >
+                {item.label}
+              </a>
+            ))}
+          </nav>
+        )}
+        <div className="chat-portal-actions">
+          <div className="language-toggle chat-language-toggle" aria-label="Language">
+            <button type="button" className={lang === "es" ? "active" : ""} onClick={() => setLang("es")}>
+              ES
+            </button>
+            <button type="button" className={lang === "en" ? "active" : ""} onClick={() => setLang("en")}>
+              EN
+            </button>
+            <button type="button" className={lang === "zh" ? "active" : ""} onClick={() => setLang("zh")}>
+              中
+            </button>
+          </div>
+          <button
+            type="button"
+            className="chat-secondary-button"
+            onClick={() => {
+              trackClick({ click_target: "chat_new_conversation", click_section: "chat_header", destination: "new_chat" });
+              void startNewConversation();
+            }}
+          >
+            <MessageSquarePlus size={16} />
+            {t.newChat}
+          </button>
+        </div>
+      </header>
+
+      <section className={welcomeVisible ? "chat-portal-shell is-empty" : "chat-portal-shell"}>
+        <div
+          className={welcomeVisible ? "chat-portal-transcript is-empty" : "chat-portal-transcript"}
+          ref={messageListRef}
+          onScroll={handleTranscriptScroll}
+        >
+          {welcomeVisible ? (
+            <div className="chat-portal-welcome">
+              <p>{t.welcomePrompt}</p>
+              <div className="chat-capability-entries">
+                {capabilityEntries.map((entry) => {
+                  const Icon = entry.icon;
+                  return (
+                    <a
+                      className="chat-capability-entry"
+                      href={entry.href}
+                      key={entry.key}
+                      onClick={(event) => {
+                        if (entry.key === "hld") {
+                          event.preventDefault();
+                          setHldMode(true);
+                          trackClick({ click_target: "chat_entry_hld", click_section: "chat_capability_entries", destination: "hld_wizard" });
+                          return;
+                        }
+                        trackClick({ click_target: `chat_entry_${entry.key}`, click_section: "chat_capability_entries", destination: entry.href });
+                      }}
+                    >
+                      <span className="chat-capability-entry-icon"><Icon size={22} /></span>
+                      <strong>{entry.label}</strong>
+                      <small>{entry.description[lang]}</small>
+                    </a>
+                  );
+                })}
+              </div>
+            </div>
+          ) : hldMode ? (
+            <div className="chat-message-list">
+              {hldPngUrl ? (
+                <HldDesignResultCard
+                  designId={hldDesignId}
+                  pngUrl={hldPngUrl}
+                  filename={hldFilename}
+                  generatedAt={hldGeneratedAt}
+                  lang={lang}
+                  onCreateAnother={startAnotherHld}
+                />
+              ) : hldPolling ? (
+                <div className="hld-generating">
+                  <LoaderCircle size={24} className="spin-icon" />
+                  <p>{hldCopy[lang].generating}</p>
+                </div>
+              ) : hldError ? (
+                <div className="hld-generating">
+                  <p className="form-error">{hldError}</p>
+                  <div className="hld-error-actions">
+                    {hldLastRequirements ? (
+                      <button type="button" className="hld-result-another" onClick={() => handleHldSubmit(hldLastRequirements)}>
+                        {hldCopy[lang].retry}
+                      </button>
+                    ) : null}
+                    <button type="button" className="chat-secondary-button" onClick={startAnotherHld}>
+                      {hldCopy[lang].editAnswers}
+                    </button>
+                    <button type="button" className="chat-secondary-button" onClick={resetHldMode}>
+                      {hldCopy[lang].back}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <HldDesignWizard lang={lang} onSubmit={handleHldSubmit} onCancel={resetHldMode} />
+              )}
+            </div>
+          ) : (
+            <div className="chat-message-list">
+              {messages.map((message) => (
+                <article key={message.message_id} className={message.role === "assistant" ? "chat-message assistant" : "chat-message user"}>
+                  <div className="chat-message-label">{message.role === "assistant" ? t.assistant : t.user}</div>
+                  <div className="chat-message-body">
+                    <p>{message.text}</p>
+                    {message.blocks.length > 0 ? (
+                      <div className="chat-block-grid">
+                        {message.blocks.map((block, index) => (
+                          <div
+                            className={block.block_type === "pricing_card" ? "chat-structured-card pricing" : "chat-structured-card"}
+                            key={`${message.message_id}-${block.block_type}-${index}`}
+                          >
+                            {block.image_url ? <img src={block.image_url} alt="" loading="lazy" /> : null}
+                            <div className="chat-structured-card-body">
+                              {block.title ? <strong>{block.title}</strong> : null}
+                              {block.body ? <p>{block.body}</p> : null}
+                              {block.tags.length > 0 ? (
+                                <div className="tag-row">
+                                  {block.tags.map((tag) => (
+                                    <span className="service-tag" key={tag}>
+                                      {tag}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {block.action ? (
+                                <button type="button" className="chat-card-action" onClick={() => handleCardAction(block)}>
+                                  {block.action.action_type === "suggest_prompt" ? t.askThis : t.open}
+                                  <SquareArrowOutUpRight size={15} />
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {message.pending ? (
+                      <span className="chat-streaming-indicator">
+                        <LoaderCircle size={16} className="spin-icon" />
+                        {t.streaming}
+                      </span>
+                    ) : null}
+                  </div>
+                </article>
+              ))}
+              <div ref={transcriptEndRef} aria-hidden="true" />
+            </div>
+          )}
+        </div>
+
+        <div className={welcomeVisible || hldMode ? "chat-composer-shell is-empty" : "chat-composer-shell"}>
+          {uploads.length > 0 ? (
+            <div className="chat-upload-list">
+              <strong>{t.uploads}</strong>
+              <div className="chat-upload-pills">
+                {uploads.map((upload) => (
+                  <span className="chat-upload-pill" key={upload.file_id}>
+                    <FileUp size={14} />
+                    <span>{upload.filename}</span>
+                    <button type="button" aria-label={t.removeFile} onClick={() => removeUpload(upload.file_id)}>
+                      <X size={14} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+              <small>{t.fileReceived}</small>
+            </div>
+          ) : null}
+
+          <div className="chat-composer">
+            <label className={webSearchEnabled ? "chat-search-toggle is-active" : "chat-search-toggle"}>
+              <input
+                type="checkbox"
+                checked={webSearchEnabled}
+                onChange={(event) => setWebSearchEnabled(event.target.checked)}
+                disabled={bootstrapping || streaming}
+              />
+              <span>{t.webSearch}</span>
+            </label>
+            <button
+              type="button"
+              className="chat-icon-button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading || streaming}
+              aria-label={t.upload}
+            >
+              {uploading ? <LoaderCircle size={18} className="spin-icon" /> : <Paperclip size={18} />}
+            </button>
+            <textarea
+              value={composer}
+              onChange={(event) => setComposer(event.target.value)}
+              onKeyDown={onComposerKeyDown}
+              placeholder={t.placeholder}
+              rows={1}
+              disabled={bootstrapping || streaming}
+            />
+            <button
+              type="button"
+              className="chat-send-button"
+              onClick={() => void sendMessage()}
+              disabled={!composer.trim() || bootstrapping || streaming}
+            >
+              <ArrowUp size={18} />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".xlsx,.csv,.pdf,.doc,.docx,.txt"
+              hidden
+              onChange={onUploadChange}
+            />
+          </div>
+          {error ? <p className="form-error chat-form-error">{error}</p> : null}
+        </div>
+      </section>
+    </main>
+  );
+}

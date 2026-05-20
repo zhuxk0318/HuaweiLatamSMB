@@ -5,6 +5,7 @@ export type SolutionEntryId = "ai-maas" | "cloud-to-cloud" | "on-prem-to-cloud" 
 export type LocalizedPair = {
   en: string;
   es: string;
+  zh?: string;
 };
 
 export type SkillLink = {
@@ -47,6 +48,9 @@ export type SolutionEntry = {
 };
 
 export function textFor(lang: Lang, copy: LocalizedPair) {
+  if (lang === "zh") {
+    return copy.zh ?? copy.en;
+  }
   if (lang === "es") {
     return copy.es;
   }
