@@ -20,8 +20,6 @@ import threading
 import xml.etree.ElementTree as ET
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable
-
 from app.chat_service import ChatCompletionsClient, build_chat_client_from_env
 from app.hwc_drawio_library import build_icon_svg_data_uri, resolve_hwc_icon
 from app.hwc_icon_mapping import resolve_product_icon_title
@@ -151,6 +149,11 @@ MAX_RENDER_EDGES = 12
 EDGE_WAYPOINT_CLEARANCE = 30
 EXTERNAL_NOTE_GAP = 40
 EXTERNAL_NOTE_WIDTH = 220
+EXTERNAL_ZONE_TITLE = "External"
+EXTERNAL_ZONE_HEADER_H = 28
+EXTERNAL_ZONE_ITEM_H = 52
+EXTERNAL_ZONE_ITEM_GAP = 14
+EXTERNAL_ZONE_PADDING = 18
 
 
 # ── Vendor resource loading ──────────────────────────────────────────────
@@ -634,58 +637,6 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
         x, y, w, h = box
         return int(x + w * anchor[0]), int(y + h * anchor[1])
 
-    def _inflate_box(box: tuple[int, int, int, int], padding: int) -> tuple[int, int, int, int]:
-        x, y, w, h = box
-        return (x - padding, y - padding, w + 2 * padding, h + 2 * padding)
-
-    def _segment_hits_box(
-        p1: tuple[int, int],
-        p2: tuple[int, int],
-        box: tuple[int, int, int, int],
-    ) -> bool:
-        x1, y1 = p1
-        x2, y2 = p2
-        bx, by, bw, bh = box
-        if x1 == x2:
-            if bx <= x1 <= bx + bw:
-                low, high = sorted((y1, y2))
-                return low < by + bh and high > by
-            return False
-        if y1 == y2:
-            if by <= y1 <= by + bh:
-                low, high = sorted((x1, x2))
-                return low < bx + bw and high > bx
-            return False
-        return False
-
-    def _path_is_clear(
-        points: list[tuple[int, int]],
-        obstacles: list[tuple[int, int, int, int]],
-    ) -> bool:
-        for i in range(len(points) - 1):
-            if points[i] == points[i + 1]:
-                continue
-            for obstacle in obstacles:
-                if _segment_hits_box(points[i], points[i + 1], obstacle):
-                    return False
-        return True
-
-    def _pick_corridor(
-        preferred: int,
-        candidates: list[int],
-        build_points: Callable[[int], list[tuple[int, int]]],
-        obstacles: list[tuple[int, int, int, int]],
-    ) -> int:
-        seen: set[int] = set()
-        ordered = [preferred] + candidates
-        for candidate in ordered:
-            if candidate in seen:
-                continue
-            seen.add(candidate)
-            if _path_is_clear(build_points(candidate), obstacles):
-                return candidate
-        return preferred
-
     def _compute_edge_waypoints(
         src_box: tuple[int, int, int, int],
         tgt_box: tuple[int, int, int, int],
@@ -693,80 +644,39 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
         entry_hint: str,
         obstacles: list[tuple[int, int, int, int]],
     ) -> list[tuple[int, int]]:
-        clearance = EDGE_WAYPOINT_CLEARANCE + 4
         src_anchor = _anchor_point(src_box, _parse_anchor(exit_hint, "exit"))
         tgt_anchor = _anchor_point(tgt_box, _parse_anchor(entry_hint, "entry"))
-        blocked = [
-            _inflate_box(box, clearance)
-            for box in obstacles
-            if box not in (src_box, tgt_box)
-        ]
 
         if "exitY=" in exit_hint:
-            src_escape_y = (
-                src_box[1] + src_box[3] + clearance
-                if "exitY=1.0" in exit_hint
-                else src_box[1] - clearance
-            )
-            tgt_escape_y = (
-                tgt_box[1] - clearance
-                if "entryY=0.0" in entry_hint
-                else tgt_box[1] + tgt_box[3] + clearance
-            )
-            left_corridor = min(src_box[0], tgt_box[0]) - clearance
-            right_corridor = max(src_box[0] + src_box[2], tgt_box[0] + tgt_box[2]) + clearance
-            preferred_corridor = left_corridor if src_anchor[0] >= tgt_anchor[0] else right_corridor
-
-            def _vertical_path(corridor_x: int) -> list[tuple[int, int]]:
-                return [
-                    src_anchor,
-                    (src_anchor[0], src_escape_y),
-                    (corridor_x, src_escape_y),
-                    (corridor_x, tgt_escape_y),
-                    (tgt_anchor[0], tgt_escape_y),
-                    tgt_anchor,
-                ]
-
-            corridor_x = _pick_corridor(
-                preferred_corridor,
-                [left_corridor, right_corridor],
-                _vertical_path,
-                blocked,
-            )
-            points = _vertical_path(corridor_x)[1:-1]
+            mid_y = (src_anchor[1] + tgt_anchor[1]) // 2
+            points = [
+                (src_anchor[0], mid_y),
+                (tgt_anchor[0], mid_y),
+            ]
         else:
-            src_escape_x = (
-                src_box[0] + src_box[2] + clearance
-                if "exitX=1.0" in exit_hint
-                else src_box[0] - clearance
-            )
-            tgt_escape_x = (
-                tgt_box[0] - clearance
-                if "entryX=0.0" in entry_hint
-                else tgt_box[0] + tgt_box[2] + clearance
-            )
-            top_corridor = min(src_box[1], tgt_box[1]) - clearance
-            bottom_corridor = max(src_box[1] + src_box[3], tgt_box[1] + tgt_box[3]) + clearance
-            preferred_corridor = top_corridor if src_anchor[1] >= tgt_anchor[1] else bottom_corridor
+            mid_x = (src_anchor[0] + tgt_anchor[0]) // 2
+            points = [
+                (mid_x, src_anchor[1]),
+                (mid_x, tgt_anchor[1]),
+            ]
 
-            def _horizontal_path(corridor_y: int) -> list[tuple[int, int]]:
-                return [
-                    src_anchor,
-                    (src_escape_x, src_anchor[1]),
-                    (src_escape_x, corridor_y),
-                    (tgt_escape_x, corridor_y),
-                    (tgt_escape_x, tgt_anchor[1]),
-                    tgt_anchor,
-                ]
+        deduped: list[tuple[int, int]] = []
+        for point in points:
+            if not deduped or deduped[-1] != point:
+                deduped.append(point)
+        return deduped
 
-            corridor_y = _pick_corridor(
-                preferred_corridor,
-                [top_corridor, bottom_corridor],
-                _horizontal_path,
-                blocked,
-            )
-            points = _horizontal_path(corridor_y)[1:-1]
-
+    def _compute_external_zone_waypoints(
+        src_box: tuple[int, int, int, int],
+        tgt_box: tuple[int, int, int, int],
+    ) -> list[tuple[int, int]]:
+        src_anchor = (src_box[0], src_box[1] + src_box[3] // 2)
+        tgt_anchor = (tgt_box[0] + tgt_box[2], tgt_box[1] + tgt_box[3] // 2)
+        corridor_x = (src_anchor[0] + tgt_anchor[0]) // 2
+        points = [
+            (corridor_x, src_anchor[1]),
+            (corridor_x, tgt_anchor[1]),
+        ]
         deduped: list[tuple[int, int]] = []
         for point in points:
             if not deduped or deduped[-1] != point:
@@ -865,6 +775,7 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
             nodes_by_container.setdefault(cid, []).append(n)
 
         container_sizes: dict[str, tuple[int, int]] = {}  # id -> (w, h)
+        container_positions: dict[str, tuple[int, int, int, int]] = {}
         # Track node positions for edge routing: node_id -> (x, y, w, h) absolute
         node_positions: dict[str, tuple[int, int, int, int]] = {}
 
@@ -892,12 +803,12 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
         # Find root region
         root_id = next(c["id"] for c in containers if c.get("parent_id") is None and c["container_type"] == "region")
 
-        # Nodes outside the region are rendered as either left-side users or right-side notes.
+        # Nodes outside the region are rendered as a right-side access/integration zone.
         outside_nodes = [n for n in nodes if n.get("container_id") not in container_by_id]
         user_nodes = [n for n in outside_nodes if n.get("type") == "user"]
         external_nodes = [n for n in outside_nodes if n.get("type") == "external"]
-        external_node_ids = {n["id"] for n in external_nodes}
-        internal_nodes = [n for n in nodes if n["id"] not in external_node_ids and n["id"] not in {u["id"] for u in user_nodes}]
+        outside_node_ids = {n["id"] for n in outside_nodes}
+        internal_nodes = [n for n in nodes if n["id"] not in outside_node_ids]
 
         def _ancestor_container(node_id: str, target_type: str) -> str | None:
             current = node_by_id.get(node_id, {}).get("container_id")
@@ -922,9 +833,23 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
                     current = container_by_id[current].get("parent_id")
             return sorted(descendants)[0] if descendants else None
 
-        def _filter_render_edges() -> tuple[list[dict], list[dict]]:
+        def _find_public_subnet_id() -> str | None:
+            subnet_ids = [
+                c["id"]
+                for c in containers
+                if c["container_type"] == "subnet"
+            ]
+            if not subnet_ids:
+                return None
+            ranked = sorted(
+                subnet_ids,
+                key=lambda cid: subnet_layer_rank(container_by_id[cid].get("label", "")),
+            )
+            return ranked[0]
+
+        def _filter_render_edges() -> tuple[list[dict], bool]:
             kept: list[dict] = []
-            removed_external: list[dict] = []
+            has_external_access = False
             seen_keys: set[tuple[str, str, str]] = set()
 
             for edge in edges:
@@ -932,8 +857,9 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
                 tgt = edge["target"]
                 kind = edge.get("edge_kind", "traffic")
 
-                if src in external_node_ids or tgt in external_node_ids:
-                    removed_external.append(edge)
+                if src in outside_node_ids or tgt in outside_node_ids:
+                    if kind == "traffic":
+                        has_external_access = True
                     continue
                 if kind in ("management", "notification"):
                     continue
@@ -966,9 +892,10 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
 
             primary_traffic = [e for e in kept if e.get("edge_kind", "traffic") == "traffic"]
             replication = [e for e in kept if e.get("edge_kind") == "replication"]
-            return (primary_traffic + replication)[:MAX_RENDER_EDGES], removed_external
+            return (primary_traffic + replication)[:MAX_RENDER_EDGES], has_external_access
 
-        render_edges, external_edges = _filter_render_edges()
+        render_edges, has_external_access = _filter_render_edges()
+        public_subnet_id = _find_public_subnet_id()
 
         # Compute full diagram size
         root_w, root_h = _compute_container_size(root_id)
@@ -988,6 +915,7 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
             cw, ch = _compute_container_size(cid)
             container_cell_map[cid] = cell_id
             container_sizes[cid] = (cw, ch)
+            container_positions[cid] = (abs_x, abs_y, cw, ch)
 
             cs = CONTAINER_STYLE_MAP[ctype]
             style = _container_style(ctype)
@@ -1059,47 +987,77 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
                         rendered_box[3],
                     )
 
-        user_col_w = max((measure_node_box(n)[0] for n in user_nodes), default=0)
-        root_x = DIAGRAM_MARGIN + (user_col_w + EXTERNAL_NOTE_GAP if user_nodes else 0)
+        root_x = DIAGRAM_MARGIN
 
         # Render root region
         _render_container(root_id, None, root_x, DIAGRAM_MARGIN, root_x, DIAGRAM_MARGIN)
 
-        if user_nodes:
-            user_x = max(DIAGRAM_MARGIN, root_x - user_col_w - EXTERNAL_NOTE_GAP)
-            user_heights = [measure_node_box(n)[1] for n in user_nodes]
-            user_total_h = sum(user_heights) + max(0, len(user_nodes) - 1) * NODE_GAP_Y
-            user_y = DIAGRAM_MARGIN + max(0, (root_h - user_total_h) // 2)
-            for n in user_nodes:
-                primary, rendered_box = _render_icon_node(n, "1", user_x, user_y)
-                node_cell_map[n["id"]] = primary
-                node_positions[n["id"]] = rendered_box
-                user_y += measure_node_box(n)[1] + NODE_GAP_Y
-
-        # Render external services as a right-side note box instead of individual nodes/edges.
-        if external_nodes:
+        external_zone_cell_id: int | None = None
+        external_zone_box: tuple[int, int, int, int] | None = None
+        if outside_nodes:
             ext_x = root_x + root_w + EXTERNAL_NOTE_GAP
-            ext_items = [f"- {n['label']}" for n in external_nodes]
-            integration_labels = sorted({(e.get("label") or "").strip() for e in external_edges if (e.get("label") or "").strip()})
-            note_lines = ["External Services:"] + ext_items
-            if integration_labels:
-                note_lines.extend(["", f"Integration: {', '.join(integration_labels[:3])}"])
-            note_value = "<div>" + "<br/>".join(note_lines) + "</div>"
-            note_h = max(120, 34 + len(note_lines) * 16)
-            note_y = DIAGRAM_MARGIN + max(0, (root_h - note_h) // 2)
-            note_style = (
-                f"rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#999999;"
-                f"align=left;verticalAlign=top;fontSize={font_size};fontFamily={font_family};spacing=8"
+            ordered_outside = user_nodes + sorted(external_nodes, key=lambda n: n["label"].lower())
+            zone_inner_h = len(ordered_outside) * EXTERNAL_ZONE_ITEM_H + max(0, len(ordered_outside) - 1) * EXTERNAL_ZONE_ITEM_GAP
+            zone_h = EXTERNAL_ZONE_HEADER_H + zone_inner_h + 2 * EXTERNAL_ZONE_PADDING
+            zone_w = EXTERNAL_NOTE_WIDTH
+            public_box = container_positions.get(public_subnet_id) if public_subnet_id else None
+            if public_box:
+                zone_y = max(DIAGRAM_MARGIN, min(DIAGRAM_MARGIN + root_h - zone_h, public_box[1]))
+            else:
+                zone_y = DIAGRAM_MARGIN + max(0, (root_h - zone_h) // 2)
+
+            zone_style = (
+                f"rounded=1;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#999999;"
+                f"fontStyle=1;fontSize={title_font_size};fontFamily={font_family};align=center"
             )
-            cells.append((cell_id, note_value, note_style, "1", None, None, ext_x, note_y, EXTERNAL_NOTE_WIDTH, note_h))
+            external_zone_cell_id = cell_id
+            external_zone_box = (ext_x, zone_y, zone_w, zone_h)
+            cells.append((cell_id, EXTERNAL_ZONE_TITLE, zone_style, "1", None, None, ext_x, zone_y, zone_w, zone_h))
             cell_id += 1
+
+            item_y = EXTERNAL_ZONE_HEADER_H + EXTERNAL_ZONE_PADDING
+            user_item_style = (
+                f"rounded=1;whiteSpace=wrap;html=1;fillColor=#DCEEFF;strokeColor=#2F80ED;"
+                f"fontSize={font_size};fontFamily={font_family};align=center;verticalAlign=middle"
+            )
+            external_item_style = (
+                f"rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#999999;"
+                f"fontSize={font_size};fontFamily={font_family};align=center;verticalAlign=middle"
+            )
+            for n in ordered_outside:
+                item_style = user_item_style if n["type"] == "user" else external_item_style
+                item_x = EXTERNAL_ZONE_PADDING
+                item_w = zone_w - 2 * EXTERNAL_ZONE_PADDING
+                cells.append((cell_id, n["label"], item_style, str(external_zone_cell_id), None, None, item_x, item_y, item_w, EXTERNAL_ZONE_ITEM_H))
+                item_y += EXTERNAL_ZONE_ITEM_H + EXTERNAL_ZONE_ITEM_GAP
+                cell_id += 1
+
+            if has_external_access and public_subnet_id:
+                render_edges.insert(0, {
+                    "source": "__external_zone__",
+                    "target": public_subnet_id,
+                    "label": "",
+                    "edge_kind": "traffic",
+                })
 
         # Edges with explicit anchors and manual waypoints to avoid icon overlap.
         base_edge_style = f"edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=0;jettySize=auto;html=1;endArrow=classic;endFill=1;strokeColor=#333333;strokeWidth=1;fontFamily={font_family};fontSize={font_size - 1}"
-        obstacle_boxes = list(node_positions.values())
+        obstacle_boxes = list(node_positions.values()) + list(container_positions.values())
         for edge in render_edges:
-            source_cell = node_cell_map.get(edge["source"])
-            target_cell = node_cell_map.get(edge["target"])
+            is_external_zone_edge = edge["source"] == "__external_zone__" or edge["target"] == "__external_zone__"
+            if edge["source"] == "__external_zone__":
+                source_cell = external_zone_cell_id
+                src_box = external_zone_box
+            else:
+                source_cell = node_cell_map.get(edge["source"]) or container_cell_map.get(edge["source"])
+                src_box = node_positions.get(edge["source"]) or container_positions.get(edge["source"])
+
+            if edge["target"] == "__external_zone__":
+                target_cell = external_zone_cell_id
+                tgt_box = external_zone_box
+            else:
+                target_cell = node_cell_map.get(edge["target"]) or container_cell_map.get(edge["target"])
+                tgt_box = node_positions.get(edge["target"]) or container_positions.get(edge["target"])
             if not source_cell or not target_cell:
                 continue
             kind = edge.get("edge_kind", "traffic")
@@ -1113,11 +1071,16 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
                 kind_parts.append(f"strokeColor={kind_overrides['strokeColor']}")
 
             # Route edge anchors to reduce node crossings
-            src_box = node_positions.get(edge["source"])
-            tgt_box = node_positions.get(edge["target"])
             exit_hint = ""
             entry_hint = ""
-            if src_box and tgt_box:
+            if is_external_zone_edge and src_box and tgt_box:
+                if edge["source"] == "__external_zone__":
+                    exit_hint = "exitX=0.0;exitY=0.5;exitDx=0;exitDy=0;"
+                    entry_hint = "entryX=1.0;entryY=0.5;entryDx=0;entryDy=0;"
+                else:
+                    exit_hint = "exitX=1.0;exitY=0.5;exitDx=0;exitDy=0;"
+                    entry_hint = "entryX=0.0;entryY=0.5;entryDx=0;entryDy=0;"
+            elif src_box and tgt_box:
                 exit_hint, entry_hint = route_edge_anchors(src_box, tgt_box)
             if not exit_hint:
                 exit_hint = "exitX=1.0;exitY=0.5;exitDx=0;exitDy=0;"
@@ -1130,13 +1093,16 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
                 edge_style += ";" + ";".join(kind_parts)
             cells.append((cell_id, label, edge_style, "1", str(source_cell), str(target_cell), 0, 0, 0, 0))
             if src_box and tgt_box:
-                edge_points_by_id[cell_id] = _compute_edge_waypoints(
-                    src_box,
-                    tgt_box,
-                    exit_hint,
-                    entry_hint,
-                    obstacle_boxes,
-                )
+                if is_external_zone_edge:
+                    edge_points_by_id[cell_id] = _compute_external_zone_waypoints(src_box, tgt_box)
+                else:
+                    edge_points_by_id[cell_id] = _compute_edge_waypoints(
+                        src_box,
+                        tgt_box,
+                        exit_hint,
+                        entry_hint,
+                        obstacle_boxes,
+                    )
             cell_id += 1
 
     else:

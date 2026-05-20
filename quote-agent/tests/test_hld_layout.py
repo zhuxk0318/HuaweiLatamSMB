@@ -453,7 +453,7 @@ class TestSubnetVerticalStacking:
 # ── Golden-shape: external nodes outside region/vpc ───────────────────────
 
 class TestExternalNodesPlacement:
-    """Verify external services are rendered as a right-side note, not nodes."""
+    """Verify outside actors render inside a right-side external zone."""
 
     def _extract_vertex_abs_positions(self, xml: str) -> dict[str, tuple[int, int, int, int]]:
         """Parse drawio XML for vertex label -> (abs_x, abs_y, w, h)."""
@@ -503,7 +503,7 @@ class TestExternalNodesPlacement:
             result[value] = (int(ax), int(ay), w, h)
         return result
 
-    def test_external_services_note_right_of_region(self):
+    def test_external_zone_right_of_region_and_stacked(self):
         spec = {
             "title": "External Node Test",
             "diagram_type": "architecture",
@@ -512,14 +512,18 @@ class TestExternalNodesPlacement:
             "containers": [
                 {"id": "region-1", "label": "Region", "container_type": "region", "parent_id": None},
                 {"id": "vpc-1", "label": "VPC", "container_type": "vpc", "parent_id": "region-1"},
+                {"id": "subnet-fe", "label": "Frontend Subnet", "container_type": "subnet", "parent_id": "vpc-1"},
                 {"id": "subnet-app", "label": "Application Subnet", "container_type": "subnet", "parent_id": "vpc-1"},
             ],
             "nodes": [
+                {"id": "user", "label": "User", "type": "user", "container_id": "outside-user"},
+                {"id": "elb", "label": "ELB", "type": "gateway", "container_id": "subnet-fe", "product": "ELB"},
                 {"id": "ecs", "label": "ECS", "type": "service", "container_id": "subnet-app", "product": "ECS"},
                 {"id": "ext-api", "label": "External API", "type": "external", "container_id": "ext-zone"},
                 {"id": "crm", "label": "CRM System", "type": "external", "container_id": "ext-zone"},
             ],
             "edges": [
+                {"source": "user", "target": "elb", "label": "https", "edge_kind": "traffic"},
                 {"source": "ecs", "target": "ext-api", "label": "call", "edge_kind": "traffic"},
             ],
         }
@@ -528,20 +532,25 @@ class TestExternalNodesPlacement:
         positions = self._extract_vertex_abs_positions(xml)
 
         ecs_pos = positions.get("ECS")
-        note_label = next((label for label in positions if "External Services:" in label), None)
-        ext_pos = positions.get(note_label) if note_label else None
+        zone_pos = positions.get("External")
+        user_pos = positions.get("User")
+        ext_pos = positions.get("External API")
+        crm_pos = positions.get("CRM System")
         assert ecs_pos is not None, "ECS node not found"
-        assert ext_pos is not None, "External services note not found"
-        assert "External API" in note_label
-        assert "CRM System" in note_label
+        assert zone_pos is not None, "External zone not found"
+        assert user_pos is not None, "User child container not found"
+        assert ext_pos is not None, "External API child container not found"
+        assert crm_pos is not None, "CRM System child container not found"
 
-        # Note should be to the right of internal node
-        ext_right_edge = ext_pos[0]  # ext x
+        # Zone should be to the right of internal node
+        ext_right_edge = zone_pos[0]
         ecs_right_edge = ecs_pos[0] + ecs_pos[2]  # ecs x + w
         assert ext_right_edge > ecs_right_edge, (
-            f"External note (x={ext_pos[0]}) should be right of ECS right edge ({ecs_right_edge})"
+            f"External zone (x={zone_pos[0]}) should be right of ECS right edge ({ecs_right_edge})"
         )
-        assert "External API" not in positions, "External services should not render as standalone nodes"
+        assert user_pos[1] < ext_pos[1], "User should be above external systems"
+        assert user_pos[1] < crm_pos[1], "User should be above external systems"
+        assert ext_pos[1] != crm_pos[1], "External systems should occupy distinct rows"
 
 
 # ── Golden-shape: logical group padding ───────────────────────────────────
@@ -668,6 +677,7 @@ class TestEdgeRenderingConstraints:
 
         assert len(edges) <= 12
         assert len(edges) == 4
+        assert any(edge["style"].count("entryX=") for edge in edges)
         for edge in edges:
             assert "exitX=" in edge["style"]
             assert "exitY=" in edge["style"]
@@ -678,24 +688,11 @@ class TestEdgeRenderingConstraints:
         styles = " ".join(edge["style"] for edge in edges)
         assert "dashed=1" in styles, "replication edge should remain dashed"
 
-    def test_waypoints_keep_clearance_from_icons(self):
+    def test_waypoints_use_short_orthogonal_path(self):
         spec = _make_template_spec()
         style = _load_style_preset()
         xml = render_spec_to_drawio_xml(spec, style)
-        geoms = TestRenderedNonOverlap()._extract_node_geometries(xml)
         edges = self._extract_edges(xml)
 
-        icon_boxes = [box for label, box in geoms.items() if label in {"ELB", "ECS", "RDS"}]
         for edge in edges:
-            for point in edge["points"]:
-                px, py = point
-                for box in icon_boxes:
-                    inflated = (
-                        box[0] - 30,
-                        box[1] - 30,
-                        box[2] + 60,
-                        box[3] + 60,
-                    )
-                    assert not boxes_overlap((px, py, 1, 1), inflated), (
-                        f"waypoint {point} should stay outside icon clearance box {inflated}"
-                    )
+            assert len(edge["points"]) <= 2, f"edge should use shortest orthogonal path: {edge['points']}"

@@ -239,6 +239,22 @@ def route_edge_anchors(
 
     dx = tgt_cx - src_cx
     dy = tgt_cy - src_cy
+    x_overlap = min(sx + sw, tx + tw) - max(sx, tx)
+    y_overlap = min(sy + sh, ty + th) - max(sy, ty)
+
+    # If boxes are stacked with meaningful horizontal overlap, prefer top/bottom anchors.
+    if x_overlap > min(sw, tw) * 0.25:
+        if dy > 0:
+            return "exitX=0.5;exitY=1.0;exitDx=0;exitDy=0;", "entryX=0.5;entryY=0.0;entryDx=0;entryDy=0;"
+        else:
+            return "exitX=0.5;exitY=0.0;exitDx=0;exitDy=0;", "entryX=0.5;entryY=1.0;entryDx=0;entryDy=0;"
+
+    # If boxes sit side-by-side with meaningful vertical overlap, prefer left/right anchors.
+    if y_overlap > min(sh, th) * 0.25:
+        if dx > 0:
+            return "exitX=1.0;exitY=0.5;exitDx=0;exitDy=0;", "entryX=0.0;entryY=0.5;entryDx=0;entryDy=0;"
+        else:
+            return "exitX=0.0;exitY=0.5;exitDx=0;exitDy=0;", "entryX=1.0;entryY=0.5;entryDx=0;entryDy=0;"
 
     # If vertical distance dominates → top/bottom routing
     if abs(dy) > abs(dx) * 0.6:
