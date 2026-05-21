@@ -233,7 +233,7 @@ class TestBoxesOverlap:
 class TestRenderedNonOverlap:
     # Container labels that should be excluded from overlap checks
     # (they naturally contain their children)
-    CONTAINER_LABELS = {"Region", "VPC", "Frontend Subnet", "Application Subnet",
+    CONTAINER_LABELS = {"Huawei Cloud Region", "VPC", "Frontend Subnet", "Application Subnet",
                         "Data Subnet", "Management Subnet", "AZ1", "AS Group",
                         "AS Policy"}
 

@@ -251,7 +251,7 @@ class TestTemplateRendering:
         style = _load_style_preset()
         xml = render_spec_to_drawio_xml(spec, style)
         assert "<mxfile>" in xml
-        assert "Region" in xml
+        assert "Huawei Cloud Region" in xml
         assert "VPC" in xml
         assert "Frontend Subnet" in xml
         assert "ELB" in xml
@@ -262,7 +262,7 @@ class TestTemplateRendering:
         style = _load_style_preset()
         xml = render_spec_to_drawio_xml(spec, style)
         assert "<mxfile>" in xml
-        assert "Region" in xml
+        assert "Huawei Cloud Region" in xml
 
     def test_container_visual_semantics(self):
         """Region has red outline, VPC red, Subnet green, AZ blue dashed."""

@@ -154,6 +154,7 @@ EXTERNAL_ZONE_HEADER_H = 28
 EXTERNAL_ZONE_ITEM_H = 52
 EXTERNAL_ZONE_ITEM_GAP = 14
 EXTERNAL_ZONE_PADDING = 18
+REGION_DISPLAY_LABEL = "Huawei Cloud Region"
 
 
 # ── Vendor resource loading ──────────────────────────────────────────────
@@ -919,7 +920,8 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
 
             cs = CONTAINER_STYLE_MAP[ctype]
             style = _container_style(ctype)
-            cells.append((cell_id, c["label"], style, parent_cell or "1", None, None, x, y, cw, ch))
+            display_label = REGION_DISPLAY_LABEL if ctype == "region" else c["label"]
+            cells.append((cell_id, display_label, style, parent_cell or "1", None, None, x, y, cw, ch))
             parent_for_children = str(cell_id)
             cell_id += 1
 
