@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download, FileCode, Plus, LoaderCircle } from "lucide-react";
+import { Download, FileCode, Plus, Pencil, LoaderCircle } from "lucide-react";
 
 type Lang = "es" | "en" | "zh";
 
@@ -8,6 +8,7 @@ const copy: Record<Lang, {
   downloadPng: string;
   downloadDrawio: string;
   createAnother: string;
+  modifyRequirements: string;
   file: string;
   generated: string;
 }> = {
@@ -16,6 +17,7 @@ const copy: Record<Lang, {
     downloadPng: "Download PNG",
     downloadDrawio: "Download .drawio",
     createAnother: "Create another HLD",
+    modifyRequirements: "Modify requirements",
     file: "File",
     generated: "Generated",
   },
@@ -24,6 +26,7 @@ const copy: Record<Lang, {
     downloadPng: "Descargar PNG",
     downloadDrawio: "Descargar .drawio",
     createAnother: "Crear otro HLD",
+    modifyRequirements: "Modificar requerimientos",
     file: "Archivo",
     generated: "Generado",
   },
@@ -32,6 +35,7 @@ const copy: Record<Lang, {
     downloadPng: "下载 PNG",
     downloadDrawio: "下载 .drawio",
     createAnother: "创建新 HLD",
+    modifyRequirements: "修改需求",
     file: "文件",
     generated: "生成时间",
   },
@@ -57,9 +61,10 @@ interface HldDesignResultCardProps {
   generatedAt: string;
   lang: Lang;
   onCreateAnother: () => void;
+  onModifyRequirements?: () => void;
 }
 
-export function HldDesignResultCard({ designId, pngUrl, filename, generatedAt, lang, onCreateAnother }: HldDesignResultCardProps) {
+export function HldDesignResultCard({ designId, pngUrl, filename, generatedAt, lang, onCreateAnother, onModifyRequirements }: HldDesignResultCardProps) {
   const t = copy[lang];
   const [downloadingPng, setDownloadingPng] = useState(false);
   const [downloadingDrawio, setDownloadingDrawio] = useState(false);
@@ -108,10 +113,18 @@ export function HldDesignResultCard({ designId, pngUrl, filename, generatedAt, l
           {t.downloadDrawio}
         </button>
       </div>
-      <button type="button" className="hld-result-another" onClick={onCreateAnother}>
-        <Plus size={16} />
-        {t.createAnother}
-      </button>
+      <div className="hld-result-bottom-actions">
+        {onModifyRequirements ? (
+          <button type="button" className="hld-result-modify" onClick={onModifyRequirements}>
+            <Pencil size={16} />
+            {t.modifyRequirements}
+          </button>
+        ) : null}
+        <button type="button" className="hld-result-another" onClick={onCreateAnother}>
+          <Plus size={16} />
+          {t.createAnother}
+        </button>
+      </div>
     </div>
   );
 }

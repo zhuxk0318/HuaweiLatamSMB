@@ -3439,10 +3439,10 @@ a {
 .hld-wizard-summary-row {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: flex-start;
   padding: 8px 0;
   border-bottom: 1px solid var(--line);
-  gap: 12px;
+  gap: 16px;
 }
 
 .hld-wizard-summary-row:last-child {
@@ -3453,14 +3453,48 @@ a {
   font-size: 0.88rem;
   font-weight: 600;
   color: var(--muted);
-  white-space: nowrap;
+  min-width: 180px;
+  padding-top: 10px;
 }
 
-.hld-wizard-summary-value {
-  font-size: 0.88rem;
+.hld-wizard-summary-control {
+  flex: 1;
+}
+
+.hld-wizard-summary-input {
+  width: 100%;
+  border: 1px solid rgba(217, 223, 231, 0.92);
+  border-radius: 10px;
+  background: var(--surface);
   color: var(--ink);
-  text-align: right;
-  word-break: break-word;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.hld-wizard-summary-input:focus {
+  border-color: rgba(199, 0, 11, 0.42);
+  box-shadow: 0 0 0 3px rgba(199, 0, 11, 0.08);
+}
+
+.hld-wizard-summary-textarea {
+  resize: vertical;
+  min-height: 72px;
+  font-family: inherit;
+}
+
+@media (max-width: 720px) {
+  .hld-wizard-summary-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .hld-wizard-summary-label {
+    min-width: 0;
+    padding-top: 0;
+  }
 }
 
 /* ── HLD Generating ─────────────────────────────────────────────────── */
@@ -3558,6 +3592,32 @@ a {
 
 .hld-result-another:hover {
   opacity: 0.9;
+}
+
+.hld-result-bottom-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.hld-result-modify {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 20px;
+  border: 2px solid var(--red);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--red);
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.hld-result-modify:hover {
+  background: var(--red);
+  color: #fff;
 }
 
 /* ── HLD Wizard: helper text, recommendation hint ─────────────────── */

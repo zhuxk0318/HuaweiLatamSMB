@@ -423,11 +423,6 @@ def _normalize_spec(spec: dict, flags: SemanticFlags, requirements: HldRequireme
     node_by_id = {n["id"]: n for n in nodes}
     node_ids = {n["id"] for n in nodes}
 
-    if not flags.any_set():
-        # Still run OBS/SDRS cleanup even without semantic flags
-        _normalize_obs_sdrs_cleanup(spec, nodes, edges, node_by_id, requirements)
-        return
-
     # Helper: find a container by type
     def _find_container(ctype: str) -> dict | None:
         for c in containers:
@@ -470,12 +465,84 @@ def _normalize_spec(spec: dict, flags: SemanticFlags, requirements: HldRequireme
         node_ids.add(nid)
         return nid
 
+    def _collapse_az_to_single_az() -> None:
+        """Flatten accidental AZ containers back to region -> vpc -> subnet -> node."""
+        az_containers = [c for c in containers if c["container_type"] == "az"]
+        if not az_containers:
+            return
+
+        region = next(
+            (c for c in containers if c["container_type"] == "region" and c.get("parent_id") is None),
+            None,
+        )
+        if not region:
+            return
+
+        container_by_id_local = {c["id"]: c for c in containers}
+        keep_az = az_containers[0]
+        keep_vpc = next(
+            (c for c in containers if c["container_type"] == "vpc" and c.get("parent_id") == keep_az["id"]),
+            None,
+        )
+        if keep_vpc:
+            keep_vpc["parent_id"] = region["id"]
+
+        removed_az_ids = {c["id"] for c in az_containers}
+        removed_vpc_ids: set[str] = set()
+
+        for c in containers:
+            if c["container_type"] == "vpc" and c.get("parent_id") in removed_az_ids:
+                if keep_vpc and c["id"] == keep_vpc["id"]:
+                    continue
+                removed_vpc_ids.add(c["id"])
+                for subnet in containers:
+                    if subnet["container_type"] == "subnet" and subnet.get("parent_id") == c["id"] and keep_vpc:
+                        # Do not remap duplicate AZ2 subnets back into the kept VPC.
+                        removed_vpc_ids.add(subnet["id"])
+
+        removed_container_ids = removed_az_ids | removed_vpc_ids
+
+        for c in containers:
+            if c["container_type"] == "subnet" and c.get("parent_id") == keep_az["id"] and keep_vpc:
+                c["parent_id"] = keep_vpc["id"]
+
+        nodes[:] = [
+            n for n in nodes
+            if n.get("container_id") not in removed_container_ids
+        ]
+        node_by_id.clear()
+        node_by_id.update({n["id"]: n for n in nodes})
+        node_ids.clear()
+        node_ids.update(n["id"] for n in nodes)
+
+        edges[:] = [
+            e for e in edges
+            if e.get("edge_kind") != "replication"
+            and e["source"] in node_ids
+            and e["target"] in node_ids
+        ]
+
+        containers[:] = [
+            c for c in containers
+            if c["id"] not in removed_container_ids and c["id"] != keep_az["id"]
+        ]
+        container_by_id.clear()
+        container_by_id.update({c["id"]: c for c in containers})
+
+    if not flags.any_set():
+        _collapse_az_to_single_az()
+        # Still run OBS/SDRS cleanup even without semantic flags
+        _normalize_obs_sdrs_cleanup(spec, nodes, edges, node_by_id, requirements)
+        return
+
     # ── DR: ensure 2AZ structure with correct hierarchy (region → az → vpc → subnet) ──
     if flags.has_dr:
         has_az = any(c["container_type"] == "az" for c in containers)
         if not has_az:
             _inject_dr_az_containers(spec, container_by_id, node_by_id)
             node_ids.update(n["id"] for n in nodes)
+    else:
+        _collapse_az_to_single_az()
 
     # ── Shared file: ensure SFS node exists ──
     if flags.needs_shared_file:
@@ -616,6 +683,7 @@ def build_hld_prompt(requirements: HldRequirements, style_preset: dict) -> list[
         "- Use edge_kind on every edge: traffic, management, replication, or notification\n"
         "- Every non-external node MUST have a product field with a standard Huawei Cloud service name\n"
         "- Product examples: ECS, CCE, RDS, DDS, ELB, WAF, OBS, EVS, NAT Gateway, EIP, SMN, DCS, DMS, CBR, VPN, Direct Connect, CES, CTS, KMS, APIG\n"
+        "- Unless the requirements explicitly ask for multi-AZ / dual-AZ deployment, do NOT create any az containers; keep single-AZ structure as region -> vpc -> subnet -> node\n"
         f"- Prefer template=\"{template_hint}\" for this deployment mode\n"
     )
 
@@ -873,6 +941,7 @@ def _repair_generated_template_spec(spec: dict) -> None:
     This is intentionally narrow and only handles:
     - legacy DR hierarchy emitted as region -> vpc -> az -> subnet
     - replication edges that point to non-node placeholders like subnet-data-dr
+    - replication self-loops such as rds -> rds
     """
     containers = spec.get("containers") or []
     nodes = spec.get("nodes") or []
@@ -938,6 +1007,12 @@ def _repair_generated_template_spec(spec: dict) -> None:
         tgt = edge.get("target")
         kind = edge.get("edge_kind", "traffic")
         if kind == "replication":
+            if src == tgt:
+                logger.warning(
+                    "Dropping replication self-loop %s -> %s during pre-parse repair",
+                    src, tgt,
+                )
+                continue
             unknown_src = src not in node_ids and src not in container_ids
             unknown_tgt = tgt not in node_ids and tgt not in container_ids
             if unknown_src or unknown_tgt:
@@ -2174,7 +2249,10 @@ def generate_hld_design(
             {"role": "user", "content": (
                 f"The JSON you output was invalid: {exc}\n"
                 "Please output a corrected Architecture Spec JSON that strictly follows the schema. "
+                f"The total number of nodes must be <= {MAX_NODES}. "
+                "Prefer a minimal diagram and drop optional services rather than exceeding the node budget. "
                 "If AZ containers are present, they must be direct children of the region, and each AZ must contain its own VPC and subnets. "
+                "Never create a replication edge where source equals target (no self-loops). "
                 "Do not point edges to container ids or placeholder ids such as subnet-*, vpc-*, az-*, or *-dr; every edge source/target must resolve to a node id. "
                 "No markdown fences, no explanation."
             )},

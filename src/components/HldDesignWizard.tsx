@@ -139,11 +139,28 @@ interface HldDesignWizardProps {
   lang: Lang;
   onSubmit: (requirements: HldRequirements) => void;
   onCancel: () => void;
+  initialRequirements?: HldRequirements | null;
+  initialStep?: WizardStep;
 }
 
-export function HldDesignWizard({ lang, onSubmit, onCancel }: HldDesignWizardProps) {
-  const [stepIndex, setStepIndex] = useState(0);
-  const [answers, setAnswers] = useState<Record<string, string>>({});
+function isLongTextField(field: WizardField): boolean {
+  return !["project_name", "deployment_mode", "preferred_filename"].includes(field);
+}
+
+export function HldDesignWizard({ lang, onSubmit, onCancel, initialRequirements, initialStep }: HldDesignWizardProps) {
+  // Compute initial step index — if initialStep is specified, jump there
+  const initialStepIndex = initialStep ? STEP_ORDER.indexOf(initialStep) : 0;
+  const [stepIndex, setStepIndex] = useState(Math.max(0, initialStepIndex));
+  // If initialRequirements provided, pre-populate answers (skip language field)
+  const initialAnswers: Record<string, string> = {};
+  if (initialRequirements) {
+    for (const key of Object.keys(initialRequirements)) {
+      if (key !== "language") {
+        initialAnswers[key] = (initialRequirements as Record<string, string>)[key];
+      }
+    }
+  }
+  const [answers, setAnswers] = useState<Record<string, string>>(initialAnswers);
   const [stepStates, setStepStates] = useState<Record<string, StepState>>({});
   const [currentInput, setCurrentInput] = useState("");
   const [loadingRec, setLoadingRec] = useState(false);
@@ -427,17 +444,50 @@ export function HldDesignWizard({ lang, onSubmit, onCancel }: HldDesignWizardPro
           <div className="hld-wizard-summary">
             <h3>{summaryCopy[lang].title}</h3>
             {STEP_ORDER.filter((s) => s !== "summary").map((s) => {
-              const label = fieldLabels[lang][s as WizardField];
-              const value = answers[s] || "—";
+              const field = s as WizardField;
+              const label = fieldLabels[lang][field];
+              const value = answers[s] || "";
               const optional = s === "preferred_filename" ? ` ${summaryCopy[lang].optional}` : "";
               const fromRec = stepStates[s]?.accepted_from_recommendation;
+              const fieldId = `hld-summary-${field}`;
               return (
                 <div className="hld-wizard-summary-row" key={s}>
-                  <span className="hld-wizard-summary-label">
+                  <label className="hld-wizard-summary-label" htmlFor={fieldId}>
                     {label}{optional}
                     {fromRec ? <span className="hld-wizard-rec-badge">{summaryCopy[lang].fromRec}</span> : null}
-                  </span>
-                  <span className="hld-wizard-summary-value">{value}</span>
+                  </label>
+                  <div className="hld-wizard-summary-control">
+                    {field === "deployment_mode" ? (
+                      <select
+                        id={fieldId}
+                        className="hld-wizard-summary-input"
+                        value={value || "cloud"}
+                        onChange={(e) => setAnswers((prev) => ({ ...prev, [field]: e.target.value }))}
+                      >
+                        <option value="cloud">cloud</option>
+                        <option value="hybrid">hybrid</option>
+                        <option value="on-prem">on-prem</option>
+                      </select>
+                    ) : isLongTextField(field) ? (
+                      <textarea
+                        id={fieldId}
+                        className="hld-wizard-summary-input hld-wizard-summary-textarea"
+                        value={value}
+                        placeholder={stepMeta[field].placeholder[lang]}
+                        rows={field === "core_components" || field === "data_stores_flow" ? 3 : 2}
+                        onChange={(e) => setAnswers((prev) => ({ ...prev, [field]: e.target.value }))}
+                      />
+                    ) : (
+                      <input
+                        id={fieldId}
+                        type="text"
+                        className="hld-wizard-summary-input"
+                        value={value}
+                        placeholder={stepMeta[field].placeholder[lang]}
+                        onChange={(e) => setAnswers((prev) => ({ ...prev, [field]: e.target.value }))}
+                      />
+                    )}
+                  </div>
                 </div>
               );
             })}

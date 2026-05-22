@@ -246,6 +246,7 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
   const [hldError, setHldError] = useState("");
   const [hldGeneratedAt, setHldGeneratedAt] = useState("");
   const [hldLastRequirements, setHldLastRequirements] = useState<HldRequirements | null>(null);
+  const [hldReturnToReview, setHldReturnToReview] = useState(false);
   const hldPollTokenRef = useRef(0);
 
   useEffect(() => {
@@ -270,6 +271,7 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
   // HLD submit handler
   async function handleHldSubmit(requirements: HldRequirements) {
     setHldLastRequirements(requirements);
+    setHldReturnToReview(false);
     setHldPolling(true);
     setHldError("");
     const token = ++hldPollTokenRef.current;
@@ -353,6 +355,20 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
     setHldError("");
     setHldGeneratedAt("");
     setHldLastRequirements(null);
+    setHldReturnToReview(false);
+  }
+
+  function handleModifyRequirements() {
+    // Return to wizard at review step, preserving last requirements
+    ++hldPollTokenRef.current;
+    setHldDesignId("");
+    setHldPolling(false);
+    setHldPngUrl("");
+    setHldFilename("");
+    setHldError("");
+    setHldGeneratedAt("");
+    setHldReturnToReview(true);
+    // hldLastRequirements is intentionally kept
   }
 
   function handleTranscriptScroll() {
@@ -659,6 +675,7 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
                   generatedAt={hldGeneratedAt}
                   lang={lang}
                   onCreateAnother={startAnotherHld}
+                  onModifyRequirements={handleModifyRequirements}
                 />
               ) : hldPolling ? (
                 <div className="hld-generating">
@@ -674,7 +691,7 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
                         {hldCopy[lang].retry}
                       </button>
                     ) : null}
-                    <button type="button" className="chat-secondary-button" onClick={startAnotherHld}>
+                    <button type="button" className="chat-secondary-button" onClick={handleModifyRequirements}>
                       {hldCopy[lang].editAnswers}
                     </button>
                     <button type="button" className="chat-secondary-button" onClick={resetHldMode}>
@@ -683,7 +700,13 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
                   </div>
                 </div>
               ) : (
-                <HldDesignWizard lang={lang} onSubmit={handleHldSubmit} onCancel={resetHldMode} />
+                <HldDesignWizard
+                  lang={lang}
+                  onSubmit={handleHldSubmit}
+                  onCancel={resetHldMode}
+                  initialRequirements={hldReturnToReview ? hldLastRequirements : null}
+                  initialStep={hldReturnToReview ? "summary" : undefined}
+                />
               )}
             </div>
           ) : (

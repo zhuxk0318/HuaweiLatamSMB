@@ -8,6 +8,7 @@ from app.hld_workflow import (
     _detect_dr_semantics,
     _detect_semantic_flags,
     _normalize_spec,
+    _repair_generated_template_spec,
     SemanticFlags,
     VALID_TEMPLATES,
     VALID_CONTAINER_TYPES,
@@ -231,6 +232,13 @@ class TestEdgeKind:
         result = parse_architecture_spec(json.dumps(spec))
         assert result is not None
 
+    def test_replication_self_loop_is_dropped_during_preparse_repair(self):
+        spec = _make_valid_template_spec()
+        spec["edges"].append({"source": "rds", "target": "rds", "label": "HA Replication", "edge_kind": "replication"})
+        _repair_generated_template_spec(spec)
+        replication_edges = [e for e in spec["edges"] if e.get("edge_kind") == "replication"]
+        assert replication_edges == []
+
 
 # ── Legacy spec backward compatibility ───────────────────────────────────
 
@@ -419,7 +427,7 @@ class TestDRDetection:
 
 
 class TestReplicationSelfLoopRejection:
-    def test_replication_self_loop_rejected(self):
+    def test_replication_self_loop_is_repaired_away(self):
         spec = _make_valid_template_spec()
         # Add a replication self-loop on the RDS node
         spec["edges"].append({
@@ -428,8 +436,9 @@ class TestReplicationSelfLoopRejection:
             "label": "DR Replication",
             "edge_kind": "replication",
         })
-        with pytest.raises(ValueError, match="Replication self-loop"):
-            parse_architecture_spec(json.dumps(spec))
+        result = parse_architecture_spec(json.dumps(spec))
+        replication_edges = [e for e in result["edges"] if e.get("edge_kind") == "replication"]
+        assert replication_edges == []
 
     def test_valid_replication_between_different_nodes(self):
         spec = _make_valid_template_spec()
@@ -880,6 +889,31 @@ class TestNormalizeVanilla:
         assert len(spec["nodes"]) == original_nodes
         assert len(spec["edges"]) == original_edges
         assert len(spec["containers"]) == original_containers
+
+    def test_accidental_az_is_collapsed_for_single_az_requirements(self):
+        spec = _make_valid_template_spec()
+        spec["containers"].append({"id": "az-1", "label": "AZ1", "container_type": "az", "parent_id": "region-1"})
+        spec["containers"].append({"id": "az-2", "label": "AZ2", "container_type": "az", "parent_id": "region-1"})
+        spec["containers"][1]["parent_id"] = "az-1"
+        spec["containers"].append({"id": "vpc-1-az2", "label": "VPC", "container_type": "vpc", "parent_id": "az-2"})
+        spec["containers"].append({"id": "subnet-data-az2", "label": "Data Subnet", "container_type": "subnet", "parent_id": "vpc-1-az2"})
+        spec["nodes"].append({"id": "rds-az2", "label": "RDS", "type": "database", "container_id": "subnet-data-az2", "product": None})
+        spec["edges"].append({"source": "rds", "target": "rds-az2", "label": "DR Sync", "edge_kind": "replication"})
+        req = HldRequirements(
+            project_name="Test",
+            business_goal="Build a portal",
+            architecture_boundary="Cloud only",
+            deployment_mode="cloud",
+            user_access_entry="Internet",
+            core_components="ECS, RDS",
+            external_integrations="None",
+            data_stores_flow="RDS MySQL",
+            network_security_boundary="VPC",
+        )
+        flags = SemanticFlags()
+        _normalize_spec(spec, flags, req)
+        assert all(c["container_type"] != "az" for c in spec["containers"])
+        assert not any(e.get("edge_kind") == "replication" for e in spec["edges"])
 
 
 # ── AZ hierarchy validation ───────────────────────────────────────────────
