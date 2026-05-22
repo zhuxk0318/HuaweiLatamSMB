@@ -14,7 +14,7 @@ from app.hwc_icon_mapping import resolve_product_icon_title
 # Icon node bounding box (icon image + label area below)
 ICON_IMAGE_SIZE = 60
 ICON_BOX_WIDTH = 120
-ICON_BOX_HEIGHT = 110
+ICON_BOX_HEIGHT = 88
 
 # Generic (fallback) shape node size
 NODE_WIDTH = 160
@@ -26,14 +26,14 @@ NODE_GAP_Y = 28
 
 # Container internal padding (space from container edge to first child)
 CONTAINER_PADDING_X = 24
-CONTAINER_PADDING_Y = 24
+CONTAINER_PADDING_Y = 10
 
 # Extra gap between container title band and first child
-CONTAINER_TITLE_GAP = 12
+CONTAINER_TITLE_GAP = 4
 
 # Logical group (AZ, AS Group, AS Policy) extra padding
 GROUP_PADDING_X = 20
-GROUP_PADDING_Y = 18
+GROUP_PADDING_Y = 8
 
 # Minimum container dimensions
 MIN_CONTAINER_W = 300
@@ -146,6 +146,7 @@ def compute_container_size(
     child_nodes: list[dict],
     *,
     is_lr: bool = False,
+    stack_vertical: bool | None = None,
     start_size: int = 26,
     max_cols: int = DEFAULT_MAX_COLS,
 ) -> tuple[int, int]:
@@ -162,7 +163,10 @@ def compute_container_size(
     if not child_container_sizes and not child_nodes:
         return MIN_CONTAINER_W, MIN_CONTAINER_H
 
-    if is_lr:
+    if stack_vertical is None:
+        stack_vertical = is_lr
+
+    if stack_vertical:
         # LR: stack child containers vertically
         child_total_h = sum(s[1] for s in child_container_sizes) + len(child_container_sizes) * CONTAINER_PADDING_Y
         child_max_w = max((s[0] for s in child_container_sizes), default=0)
@@ -192,7 +196,7 @@ def compute_container_size(
     pad_x = CONTAINER_PADDING_X + (GROUP_PADDING_X if is_group else 0)
     pad_y = CONTAINER_PADDING_Y + (GROUP_PADDING_Y if is_group else 0)
 
-    if is_lr:
+    if stack_vertical:
         # LR: child containers stacked vertically, nodes below them
         content_w = max(child_max_w if child_container_sizes else 0, nodes_w)
         content_h = (child_total_h if child_container_sizes else 0) + nodes_h

@@ -98,7 +98,6 @@ PRODUCT_TO_ICON_TITLE: dict[str, str] = {
     "romac": "ROMA Connect",
     "sdwan": "Software-Defined WAN (SDWAN)",
     "sdrs": "Storage Disaster Recovery Service (SDRS)",
-    "sdrs": "Storage Disaster Recovery Service (SDRS)",
 }
 
 # Synonym map: alternative names -> canonical product key
@@ -200,37 +199,124 @@ _SYNONYMS: dict[str, str] = {
     # Region / AZ
     "availability zone": "az",
     "availability zone (az)": "az",
+    # SFS / shared storage
+    "shared file": "sfs",
+    "shared files": "sfs",
+    "file share": "sfs",
+    "file sharing": "sfs",
+    "shared storage": "sfs",
+    "nas": "sfs",
+    "nfs": "sfs",
+    "sfs turbo": "sfs_turbo",
+    "scalable file service turbo": "sfs_turbo",
+    "scalable file service (sfs) turbo": "sfs_turbo",
+    # RDS / MySQL
+    "mysql": "rds_mysql",
+    "rds mysql": "rds_mysql",
+    "rds for mysql": "rds_mysql",
+    "postgresql": "rds_pg",
+    "rds for postgresql": "rds_pg",
+    "sql server": "rds_sqlserver",
+    "rds for sql server": "rds_sqlserver",
+    "mariadb": "rds_mariadb",
+    "rds for mariadb": "rds_mariadb",
+    # DCS / Redis
+    "redis": "dcs",
+    "redis cache": "dcs",
+    "cache": "dcs",
+    "distributed cache service for redis": "dcs",
+    # Direct Connect
+    "dedicated line": "dc",
+    "private line": "dc",
+    "direct connect (dc)": "dc",
+    # DRS
+    "database replication": "drs",
+    "database replication service": "drs",
+    "data replication service (drs)": "drs",
+    "drs": "drs",
+    # CBR / Backup
+    "backup": "cbr",
+    "backup copy": "cbr",
+    "cloud backup": "cbr",
+    "disaster recovery": "cbr",
+    "storage disaster recovery service": "cbr",
+    "storage disaster recovery service (sdrs)": "cbr",
+    # Kafka / RabbitMQ
+    "dms for rocketmq": "dms_rocketmq",
+    "rocketmq": "dms_rocketmq",
+    # FunctionGraph
+    "function graph": "functiongraph",
+    # Workspace
+    "virtual desktop": "workspace",
+    # ModelArts
+    "model arts": "modelarts",
 }
+
+
+# Role suffixes stripped during normalization so "RDS MySQL primary" → "rds mysql"
+_ROLE_SUFFIXES = ("primary", "standby", "replica", "master", "slave", "active", "passive")
+
+
+def _normalize(product: str) -> str:
+    """Lowercase, unify separators, strip role suffixes."""
+    s = product.strip().lower()
+    # hyphens / underscores → spaces, collapse whitespace
+    s = s.replace("-", " ").replace("_", " ")
+    s = " ".join(s.split())
+    # Strip trailing role suffixes: "rds mysql primary" → "rds mysql"
+    parts = s.rsplit(" ", 1)
+    if len(parts) == 2 and parts[1] in _ROLE_SUFFIXES:
+        s = parts[0]
+    # Strip parenthesized role: "RDS MySQL (primary)" → "rds mysql"
+    s = _STRIP_PARENS.sub("", s).strip()
+    return s
+
+
+# Pre-compiled for _normalize
+import re as _re
+
+_STRIP_PARENS = _re.compile(r"\s*\([^)]*\)")
 
 
 def resolve_product_icon_title(product: str | None) -> str | None:
     """Resolve a product name to its library icon title.
 
-    Tries direct lookup, then synonym normalization, then case-insensitive
-    search. Returns None if no mapping found (caller should use fallback).
+    Tries direct lookup, then synonym normalization, then normalized lookup
+    (separator unification + role suffix stripping), then case-insensitive
+    search against the library title index.
+    Returns None if no mapping found (caller should use fallback).
     """
     if not product:
         return None
 
-    # Direct lookup by canonical key
     key = product.strip().lower()
+
+    # Direct lookup by canonical key
     title = PRODUCT_TO_ICON_TITLE.get(key)
     if title:
         return title
 
-    # Synonym lookup
+    # Synonym lookup on raw key
     title_via_syn = PRODUCT_TO_ICON_TITLE.get(_SYNONYMS.get(key))
     if title_via_syn:
         return title_via_syn
+
+    # Normalized lookup (separator unification + role suffix stripping)
+    norm = _normalize(product)
+    if norm != key:
+        title = PRODUCT_TO_ICON_TITLE.get(norm)
+        if title:
+            return title
+        title_via_syn = PRODUCT_TO_ICON_TITLE.get(_SYNONYMS.get(norm))
+        if title_via_syn:
+            return title_via_syn
 
     # Try matching the product directly as an icon title (case-insensitive)
     from app.hwc_drawio_library import _title_index
 
     index = _title_index()
-    # Exact match
     if product in index:
         return product
-    # Case-insensitive match
     lower = product.lower()
     for t in index:
         if t.lower() == lower:

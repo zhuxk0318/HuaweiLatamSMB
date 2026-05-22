@@ -114,13 +114,15 @@ VALID_CONTAINER_TYPES = ("region", "vpc", "subnet", "az", "as_group", "as_policy
 VALID_EDGE_KINDS = ("traffic", "management", "replication", "notification")
 
 # Container type -> visual semantics for drawio rendering
+# Lighter style inspired by huaweicloud-arch-drawio: boundary partitions,
+# left-aligned labels, smaller headers, no heavy fill.
 CONTAINER_STYLE_MAP: dict[str, dict[str, str]] = {
-    "region":     {"outline": "#c0392b", "fill": "#fdf2f2", "fontStyle": "1", "dashed": "0",   "dashPattern": "",      "startSize": "30", "strokeWidth": "2"},
-    "vpc":        {"outline": "#E85D4D", "fill": "#FFE6E6", "fontStyle": "1", "dashed": "0",   "dashPattern": "",      "startSize": "28", "strokeWidth": "2"},
-    "subnet":     {"outline": "#7ED321", "fill": "#E6F7E6", "fontStyle": "1", "dashed": "0",   "dashPattern": "",      "startSize": "26", "strokeWidth": "2"},
-    "az":         {"outline": "#4A90E2", "fill": "#eaf2f8", "fontStyle": "0", "dashed": "1",   "dashPattern": "5 5",   "startSize": "24", "strokeWidth": "1"},
-    "as_group":   {"outline": "#4A90E2", "fill": "#eaf2f8", "fontStyle": "0", "dashed": "1",   "dashPattern": "5 5",   "startSize": "24", "strokeWidth": "1"},
-    "as_policy":  {"outline": "#4A90E2", "fill": "#eaf2f8", "fontStyle": "0", "dashed": "1",   "dashPattern": "5 5",   "startSize": "24", "strokeWidth": "1"},
+    "region":     {"outline": "#3771c8", "fill": "none",      "fontStyle": "0", "dashed": "1",   "dashPattern": "8 4",   "startSize": "18", "strokeWidth": "1"},
+    "vpc":        {"outline": "#f85835", "fill": "none",      "fontStyle": "0", "dashed": "0",   "dashPattern": "",      "startSize": "18", "strokeWidth": "1"},
+    "subnet":     {"outline": "#999999", "fill": "#f5f5f5",   "fontStyle": "0", "dashed": "1",   "dashPattern": "5 5",   "startSize": "16", "strokeWidth": "1"},
+    "az":         {"outline": "#3298ff", "fill": "none",      "fontStyle": "0", "dashed": "1",   "dashPattern": "5 5",   "startSize": "16", "strokeWidth": "1"},
+    "as_group":   {"outline": "#3298ff", "fill": "none",      "fontStyle": "0", "dashed": "1",   "dashPattern": "5 5",   "startSize": "16", "strokeWidth": "1"},
+    "as_policy":  {"outline": "#3298ff", "fill": "none",      "fontStyle": "0", "dashed": "1",   "dashPattern": "5 5",   "startSize": "16", "strokeWidth": "1"},
 }
 
 # edge_kind -> drawio style overrides
@@ -253,8 +255,10 @@ ARCHITECTURE_SPEC_SCHEMA = """\
 Hierarchy rules:
 - containers must form a valid tree: exactly one root container with container_type="region"
 - region contains one or more vpc containers
-- vpc contains one or more subnet containers
-- az, as_group, as_policy are optional and nest inside a subnet
+- vpc contains one or more az containers (for DR/HA) or subnet containers (for single-AZ)
+- az contains one or more subnet containers (when DR/HA is required)
+- subnet may optionally contain as_group or as_policy containers
+- az must NOT be a child of subnet (az sits between vpc and subnet)
 - external/user nodes must NOT be inside a region (container_id must be null or reference a container outside region)
 - database nodes must be inside a subnet whose label contains "data" or "db"
 - template="layered_horizontal": conceptual multi-tier (Internet/Ingress → Frontend → Application → Data), use subnet names like "External Subnet", "Frontend Subnet", "Application Subnet", "Data Subnet"
@@ -275,6 +279,297 @@ def _normalize_text_field(value: str) -> list[str]:
     """Split a comma-or-slash-separated text field into a list of trimmed items."""
     parts = re.split(r"[,;/]\s*", value)
     return [p.strip() for p in parts if p.strip()]
+
+
+# Only explicit multi-AZ topology cues should trigger AZ container rendering.
+_DR_KEYWORDS = re.compile(
+    r"multi[\s-]?az|dual[\s-]?az|two[\s-]?az|2[\s-]?az|"
+    r"active.?active\s+across\s+az|active.?standby\s+across\s+az|"
+    r"跨az|双az|多az|双可用区|多可用区",
+    re.IGNORECASE,
+)
+
+
+def _detect_dr_semantics(requirements: HldRequirements) -> bool:
+    """Return True only for explicit multi-AZ topology requirements."""
+    fields = [
+        requirements.business_goal,
+        requirements.architecture_boundary,
+        requirements.core_components,
+        requirements.data_stores_flow,
+        requirements.network_security_boundary,
+    ]
+    return any(_DR_KEYWORDS.search(f) for f in fields if f)
+
+
+# ── Semantic template detection ───────────────────────────────────────────
+
+_SHARED_FILE_KEYWORDS = re.compile(
+    r"shared\s+file|file\s+share|shared\s+storage|nas|nfs|sfs",
+    re.IGNORECASE,
+)
+
+_HYBRID_KEYWORDS = re.compile(
+    r"hybrid|on.?prem|on\s+premise|idc|data\s+center|local\s+dc|"
+    r"专线|本地机房|private\s+line|dedicated\s+line",
+    re.IGNORECASE,
+)
+
+_CCE_KEYWORDS = re.compile(
+    r"cce|kubernetes|k8s|container|microservice|ingress",
+    re.IGNORECASE,
+)
+
+# OBS is only appropriate when these semantics are present
+_OBS_KEYWORDS = re.compile(
+    r"object\s+storage|static\s+assets?|large\s+files?|media\s+archive|"
+    r"big\s+data|analytics|log\s+archive|backup\s+archive|"
+    r"data\s+lake|blob\s+storage|file\s+archive|"
+    r"对象存储|大数据|日志归档|备份归档",
+    re.IGNORECASE,
+)
+
+
+class SemanticFlags:
+    """Lightweight flags detected from requirements text fields."""
+    __slots__ = ("has_dr", "needs_shared_file", "is_hybrid", "prefers_cce")
+
+    def __init__(self, *, has_dr: bool = False, needs_shared_file: bool = False,
+                 is_hybrid: bool = False, prefers_cce: bool = False):
+        self.has_dr = has_dr
+        self.needs_shared_file = needs_shared_file
+        self.is_hybrid = is_hybrid
+        self.prefers_cce = prefers_cce
+
+    def any_set(self) -> bool:
+        return self.has_dr or self.needs_shared_file or self.is_hybrid or self.prefers_cce
+
+
+def _detect_semantic_flags(requirements: HldRequirements) -> SemanticFlags:
+    """Detect all semantic template flags from requirements text fields."""
+    fields = [
+        requirements.business_goal,
+        requirements.architecture_boundary,
+        requirements.core_components,
+        requirements.data_stores_flow,
+        requirements.network_security_boundary,
+        requirements.external_integrations,
+    ]
+    text = " ".join(f for f in fields if f)
+    return SemanticFlags(
+        has_dr=_detect_dr_semantics(requirements),
+        needs_shared_file=bool(_SHARED_FILE_KEYWORDS.search(text)),
+        is_hybrid=bool(_HYBRID_KEYWORDS.search(text)),
+        prefers_cce=bool(_CCE_KEYWORDS.search(text)),
+    )
+
+
+# ── Spec normalizer helpers ──────────────────────────────────────────────
+
+
+def _normalize_obs_sdrs_cleanup(
+    spec: dict,
+    nodes: list[dict],
+    edges: list[dict],
+    node_by_id: dict[str, dict],
+    requirements: HldRequirements,
+) -> None:
+    """Remove OBS nodes without object-storage semantics and strip unsupported DR/backup products."""
+    # OBS gating: remove OBS nodes unless explicit object-storage semantics
+    obs_nodes = [n for n in nodes if n.get("product") and n["product"].lower() == "obs"]
+    if obs_nodes:
+        req_fields = [
+            requirements.business_goal,
+            requirements.architecture_boundary,
+            requirements.core_components,
+            requirements.data_stores_flow,
+            requirements.network_security_boundary,
+            requirements.external_integrations,
+        ]
+        req_text = " ".join(f for f in req_fields if f)
+        has_obs_semantics = bool(_OBS_KEYWORDS.search(req_text))
+        if not has_obs_semantics:
+            obs_ids = {n["id"] for n in obs_nodes}
+            nodes[:] = [n for n in nodes if n["id"] not in obs_ids]
+            edges[:] = [e for e in edges if e["source"] not in obs_ids and e["target"] not in obs_ids]
+            for oid in obs_ids:
+                node_by_id.pop(oid, None)
+
+    # Unsupported default backup/DR products: strip SDRS and CSBS if they slipped through
+    unsupported_nodes = [
+        n for n in nodes
+        if n.get("product") and n["product"].lower() in {"sdrs", "csbs"}
+    ]
+    if unsupported_nodes:
+        unsupported_ids = {n["id"] for n in unsupported_nodes}
+        nodes[:] = [n for n in nodes if n["id"] not in unsupported_ids]
+        edges[:] = [e for e in edges if e["source"] not in unsupported_ids and e["target"] not in unsupported_ids]
+        for nid in unsupported_ids:
+            node_by_id.pop(nid, None)
+
+
+# ── Spec normalizer ──────────────────────────────────────────────────────
+
+
+def _normalize_spec(spec: dict, flags: SemanticFlags, requirements: HldRequirements) -> None:
+    """Post-parse spec normalizer: inject/fix structure based on semantic flags.
+
+    Mutates spec in-place. Runs after parse_architecture_spec validation.
+    """
+    containers = spec.get("containers", [])
+    nodes = spec.get("nodes", [])
+    edges = spec.get("edges", [])
+    container_by_id = {c["id"]: c for c in containers}
+    node_by_id = {n["id"]: n for n in nodes}
+    node_ids = {n["id"] for n in nodes}
+
+    if not flags.any_set():
+        # Still run OBS/SDRS cleanup even without semantic flags
+        _normalize_obs_sdrs_cleanup(spec, nodes, edges, node_by_id, requirements)
+        return
+
+    # Helper: find a container by type
+    def _find_container(ctype: str) -> dict | None:
+        for c in containers:
+            if c["container_type"] == ctype:
+                return c
+        return None
+
+    # Helper: find data subnet id
+    def _find_data_subnet() -> str | None:
+        for c in containers:
+            if c["container_type"] == "subnet":
+                label = c.get("label", "").lower()
+                if "data" in label or "db" in label:
+                    return c["id"]
+        return None
+
+    # Helper: find app subnet id
+    def _find_app_subnet() -> str | None:
+        for c in containers:
+            if c["container_type"] == "subnet":
+                label = c.get("label", "").lower()
+                if "app" in label or "application" in label:
+                    return c["id"]
+        return None
+
+    # Helper: check if a product already exists among nodes
+    def _has_product(product: str) -> bool:
+        for n in nodes:
+            p = n.get("product")
+            if p is not None and p.lower() == product.lower():
+                return True
+        return False
+
+    # Helper: next available id
+    def _next_id(prefix: str) -> str:
+        i = 1
+        while f"{prefix}-{i}" in node_ids:
+            i += 1
+        nid = f"{prefix}-{i}"
+        node_ids.add(nid)
+        return nid
+
+    # ── DR: ensure 2AZ structure with correct hierarchy (region → az → vpc → subnet) ──
+    if flags.has_dr:
+        has_az = any(c["container_type"] == "az" for c in containers)
+        if not has_az:
+            _inject_dr_az_containers(spec, container_by_id, node_by_id)
+            node_ids.update(n["id"] for n in nodes)
+
+    # ── Shared file: ensure SFS node exists ──
+    if flags.needs_shared_file:
+        if not _has_product("SFS") and not _has_product("SFS Turbo"):
+            data_subnet_id = _find_data_subnet()
+            if data_subnet_id:
+                sfs_id = _next_id("sfs")
+                sfs_node = {
+                    "id": sfs_id,
+                    "label": "SFS Turbo",
+                    "type": "service",
+                    "container_id": data_subnet_id,
+                    "product": "SFS Turbo",
+                }
+                nodes.append(sfs_node)
+                node_by_id[sfs_id] = sfs_node
+                # Connect from app-layer services to SFS
+                app_subnet_id = _find_app_subnet()
+                if app_subnet_id:
+                    app_services = [n for n in nodes if n.get("container_id") == app_subnet_id and n.get("type") == "service"]
+                    if app_services:
+                        edges.append({
+                            "source": app_services[0]["id"],
+                            "target": sfs_id,
+                            "label": "mount",
+                            "edge_kind": "traffic",
+                        })
+
+    # ── Hybrid: ensure external side + VPN/DC connection ──
+    if flags.is_hybrid:
+        # Check for existing external nodes
+        external_nodes = [n for n in nodes if n.get("type") == "external"]
+        if not external_nodes:
+            # Inject an on-prem external node
+            onprem_id = _next_id("onprem")
+            onprem_node = {
+                "id": onprem_id,
+                "label": "On-Prem IDC",
+                "type": "external",
+                "container_id": "outside",
+                "product": None,
+            }
+            nodes.append(onprem_node)
+            node_by_id[onprem_id] = onprem_node
+            external_nodes = [onprem_node]
+
+        # Check for VPN or Direct Connect node
+        has_vpn_or_dc = _has_product("VPN") or _has_product("Direct Connect") or _has_product("DC")
+        if not has_vpn_or_dc:
+            # Inject a VPN gateway in the frontend subnet
+            fe_subnet = None
+            for c in containers:
+                if c["container_type"] == "subnet":
+                    label = c.get("label", "").lower()
+                    if "frontend" in label or "public" in label or "ingress" in label:
+                        fe_subnet = c
+                        break
+            if not fe_subnet:
+                fe_subnet = _find_container("subnet")
+            if fe_subnet:
+                vpn_id = _next_id("vpn")
+                vpn_node = {
+                    "id": vpn_id,
+                    "label": "VPN",
+                    "type": "gateway",
+                    "container_id": fe_subnet["id"],
+                    "product": "VPN",
+                }
+                nodes.append(vpn_node)
+                node_by_id[vpn_id] = vpn_node
+                # Add edge from external to VPN
+                edges.append({
+                    "source": external_nodes[0]["id"],
+                    "target": vpn_id,
+                    "label": "VPN Tunnel",
+                    "edge_kind": "traffic",
+                })
+
+    # ── CCE: prefer CCE over ECS for container/microservice scenarios ──
+    if flags.prefers_cce:
+        if not _has_product("CCE"):
+            # Find first ECS-like node in app subnet and replace with CCE
+            app_subnet_id = _find_app_subnet()
+            if app_subnet_id:
+                for n in nodes:
+                    is_ecs = (n.get("product") == "ECS" or
+                              (n.get("product") is None and "ecs" in n.get("label", "").lower()))
+                    if is_ecs and n.get("container_id") == app_subnet_id:
+                        n["product"] = "CCE"
+                        n["label"] = "CCE"
+                        break
+
+    # ── OBS gating + SDRS/CSBS removal (always runs) ──
+    _normalize_obs_sdrs_cleanup(spec, nodes, edges, node_by_id, requirements)
 
 
 def build_hld_prompt(requirements: HldRequirements, style_preset: dict) -> list[dict[str, str]]:
@@ -324,6 +619,47 @@ def build_hld_prompt(requirements: HldRequirements, style_preset: dict) -> list[
         f"- Prefer template=\"{template_hint}\" for this deployment mode\n"
     )
 
+    # DR/HA-specific constraints: force 2AZ structure
+    flags = _detect_semantic_flags(requirements)
+    if flags.has_dr:
+        system_msg += (
+            "\n\n## CRITICAL: Disaster Recovery / High Availability Requirements Detected\n"
+            "You MUST generate a two-AZ (Availability Zone) architecture:\n"
+            "- Add two containers with container_type=\"az\" as children of the region: one labeled \"AZ1\" and one labeled \"AZ2\"\n"
+            "- AZ containers sit BETWEEN region and VPC: region → az → vpc → subnet → node\n"
+            "- Each AZ must contain its own VPC with matching subnets under that VPC\n"
+            "- AZ2 should mirror AZ1's nodes and icons as a standby copy\n"
+            "- Use edge_kind=\"replication\" edges ONLY between nodes in different AZ containers (e.g. primary in AZ1 → standby in AZ2)\n"
+            "- NEVER create a replication edge where source equals target (self-loop)\n"
+            "- Keep replication/sync expression minimal; a single clear cross-AZ line is preferred over many parallel lines\n"
+            "- Do NOT place AZ containers inside subnets or VPCs — AZ must be a child of the region\n"
+            "- Do NOT include SDRS or CSBS — use CBR for backup if backup is needed\n"
+        )
+
+    if flags.needs_shared_file:
+        system_msg += (
+            "\n\n## Shared File Storage Requirement Detected\n"
+            "- Include an SFS Turbo node (product=\"SFS Turbo\") in the data subnet\n"
+            "- Do NOT substitute OBS for shared file storage — use SFS Turbo instead\n"
+            "- Add a traffic edge from application services to the SFS Turbo node\n"
+        )
+
+    if flags.is_hybrid:
+        system_msg += (
+            "\n\n## Hybrid / On-Premise Connectivity Requirement Detected\n"
+            "- Include an external node (type=\"external\") for the on-premise / IDC side\n"
+            "- Include a VPN or Direct Connect gateway node in the frontend subnet\n"
+            "- Add a traffic edge from the external node to the VPN/DC gateway\n"
+        )
+
+    if flags.prefers_cce:
+        system_msg += (
+            "\n\n## Container / Microservice Requirement Detected\n"
+            "- Use CCE (Cloud Container Engine) as the primary compute node, NOT plain ECS\n"
+            "- Typical pattern: ELB/WAF → CCE → data/cache\n"
+            "- Set product=\"CCE\" on the container compute node\n"
+        )
+
     user_msg = (
         f"Generate an HLD architecture diagram with these requirements:\n\n"
         f"Project: {requirements.project_name}\n"
@@ -344,6 +680,276 @@ def build_hld_prompt(requirements: HldRequirements, style_preset: dict) -> list[
     ]
 
 
+# ── DR normalization helper ──────────────────────────────────────────────
+
+
+def _inject_dr_az_containers(
+    spec: dict,
+    container_by_id: dict[str, dict],
+    node_by_id: dict[str, dict],
+) -> None:
+    """Inject a minimal 2AZ DR structure using region → az → vpc → subnet → node."""
+    containers = spec["containers"]
+    nodes = spec["nodes"]
+    edges = spec["edges"]
+    region = next(
+        (c for c in containers if c["container_type"] == "region" and c.get("parent_id") is None),
+        None,
+    )
+    if not region:
+        return
+
+    source_vpc = next(
+        (c for c in containers if c["container_type"] == "vpc" and c.get("parent_id") == region["id"]),
+        None,
+    )
+    if not source_vpc:
+        return
+
+    def _unique_container_id(base: str) -> str:
+        candidate = base
+        index = 2
+        while candidate in container_by_id:
+            candidate = f"{base}-{index}"
+            index += 1
+        return candidate
+
+    def _unique_node_id(base: str) -> str:
+        candidate = base
+        existing = {n["id"] for n in nodes}
+        index = 2
+        while candidate in existing:
+            candidate = f"{base}-{index}"
+            index += 1
+        return candidate
+
+    def _container_depth(cid: str) -> int:
+        depth = 0
+        current = container_by_id.get(cid)
+        while current and current.get("parent_id"):
+            depth += 1
+            current = container_by_id.get(current["parent_id"])
+        return depth
+
+    def _is_descendant_of(container_id: str, ancestor_id: str) -> bool:
+        current = container_by_id.get(container_id)
+        while current:
+            if current["id"] == ancestor_id:
+                return True
+            pid = current.get("parent_id")
+            current = container_by_id.get(pid) if pid else None
+        return False
+
+    def _find_data_like_subnet(vpc_id: str) -> str | None:
+        candidates = [
+            c for c in containers
+            if c["container_type"] == "subnet"
+            and c.get("parent_id") == vpc_id
+            and ("data" in c.get("label", "").lower() or "db" in c.get("label", "").lower() or "storage" in c.get("label", "").lower())
+        ]
+        return candidates[0]["id"] if candidates else None
+
+    def _ancestor_of_type(container_id: str, target_type: str) -> str | None:
+        current = container_by_id.get(container_id)
+        while current:
+            if current["container_type"] == target_type:
+                return current["id"]
+            pid = current.get("parent_id")
+            current = container_by_id.get(pid) if pid else None
+        return None
+
+    # Remove existing replication edges; the normalized DR view should use a single clear cross-AZ line.
+    edges[:] = [e for e in edges if e.get("edge_kind") != "replication"]
+
+    az1_id = _unique_container_id("az-1")
+    az2_id = _unique_container_id("az-2")
+    az1 = {"id": az1_id, "label": "AZ1", "container_type": "az", "parent_id": region["id"]}
+    az2 = {"id": az2_id, "label": "AZ2", "container_type": "az", "parent_id": region["id"]}
+    containers.append(az1)
+    containers.append(az2)
+    container_by_id[az1_id] = az1
+    container_by_id[az2_id] = az2
+
+    # Reparent the original VPC under AZ1 and clone its full subtree under AZ2.
+    source_vpc["parent_id"] = az1_id
+    cloned_vpc_id = _unique_container_id(f"{source_vpc['id']}-az2")
+    cloned_vpc = {
+        "id": cloned_vpc_id,
+        "label": source_vpc["label"],
+        "container_type": "vpc",
+        "parent_id": az2_id,
+    }
+    containers.append(cloned_vpc)
+    container_by_id[cloned_vpc_id] = cloned_vpc
+
+    container_clone_map: dict[str, str] = {source_vpc["id"]: cloned_vpc_id}
+    descendant_containers = [
+        c for c in containers
+        if c["id"] not in {az1_id, az2_id, cloned_vpc_id}
+        and _is_descendant_of(c["id"], source_vpc["id"])
+        and c["id"] != source_vpc["id"]
+    ]
+    descendant_containers.sort(key=lambda c: _container_depth(c["id"]))
+
+    for original in descendant_containers:
+        cloned_id = _unique_container_id(f"{original['id']}-az2")
+        cloned_parent = container_clone_map.get(original["parent_id"])
+        if not cloned_parent:
+            continue
+        cloned = {
+            "id": cloned_id,
+            "label": original["label"],
+            "container_type": original["container_type"],
+            "parent_id": cloned_parent,
+        }
+        containers.append(cloned)
+        container_by_id[cloned_id] = cloned
+        container_clone_map[original["id"]] = cloned_id
+
+    source_nodes = [
+        n for n in list(nodes)
+        if n.get("container_id") in container_clone_map or _is_descendant_of(n.get("container_id", ""), source_vpc["id"])
+    ]
+    node_clone_map: dict[str, str] = {}
+    for node in source_nodes:
+        cloned_container_id = container_clone_map.get(node.get("container_id", ""))
+        if not cloned_container_id:
+            continue
+        cloned_node_id = _unique_node_id(f"{node['id']}-az2")
+        cloned_label = node["label"]
+        cloned_node = {
+            "id": cloned_node_id,
+            "label": cloned_label[:MAX_LABEL_LEN],
+            "type": node.get("type", "service"),
+            "container_id": cloned_container_id,
+            "product": node.get("product"),
+        }
+        nodes.append(cloned_node)
+        node_by_id[cloned_node_id] = cloned_node
+        node_clone_map[node["id"]] = cloned_node_id
+
+    # Keep backup in the data/storage subnet if it exists, and strip unsupported products.
+    for node in nodes:
+        product = (node.get("product") or "").lower()
+        if product == "cbr":
+            current_cid = node.get("container_id", "")
+            current_container = container_by_id.get(current_cid)
+            if current_container and current_container["container_type"] != "subnet":
+                target_subnet = _find_data_like_subnet(_ancestor_of_type(current_cid, "vpc") or source_vpc["id"])
+                if target_subnet:
+                    node["container_id"] = target_subnet
+
+    # Prefer a single database/storage replication line; fall back to the first cloned node.
+    primary_id = None
+    standby_id = None
+    preferred_types = ("database",)
+    for preferred_type in preferred_types:
+        for node in source_nodes:
+            if node.get("type") == preferred_type and node["id"] in node_clone_map:
+                primary_id = node["id"]
+                standby_id = node_clone_map[node["id"]]
+                break
+        if primary_id:
+            break
+    if not primary_id:
+        for node in source_nodes:
+            if node["id"] in node_clone_map:
+                primary_id = node["id"]
+                standby_id = node_clone_map[node["id"]]
+                break
+
+    if primary_id and standby_id:
+        edges.append({
+            "source": primary_id,
+            "target": standby_id,
+            "label": "DR Sync",
+            "edge_kind": "replication",
+        })
+
+
+def _repair_generated_template_spec(spec: dict) -> None:
+    """Apply small deterministic repairs before strict validation.
+
+    This is intentionally narrow and only handles:
+    - legacy DR hierarchy emitted as region -> vpc -> az -> subnet
+    - replication edges that point to non-node placeholders like subnet-data-dr
+    """
+    containers = spec.get("containers") or []
+    nodes = spec.get("nodes") or []
+    edges = spec.get("edges") or []
+    if not containers:
+        return
+
+    container_by_id = {c["id"]: c for c in containers}
+    region = next(
+        (c for c in containers if c.get("parent_id") is None and c.get("container_type") == "region"),
+        None,
+    )
+    if region:
+        # Repair legacy region -> vpc -> az -> subnet into region -> az -> vpc -> subnet.
+        root_vpcs = [
+            c for c in containers
+            if c.get("container_type") == "vpc" and c.get("parent_id") == region["id"]
+        ]
+        for vpc in list(root_vpcs):
+            az_children = [
+                c for c in containers
+                if c.get("container_type") == "az" and c.get("parent_id") == vpc["id"]
+            ]
+            if not az_children:
+                continue
+
+            def _unique_container_id(base: str) -> str:
+                candidate = base
+                index = 2
+                while candidate in container_by_id:
+                    candidate = f"{base}-{index}"
+                    index += 1
+                return candidate
+
+            first_az = az_children[0]
+            first_az["parent_id"] = region["id"]
+            vpc["parent_id"] = first_az["id"]
+
+            for subnet in containers:
+                if subnet.get("container_type") == "subnet" and subnet.get("parent_id") == first_az["id"]:
+                    subnet["parent_id"] = vpc["id"]
+
+            for az in az_children[1:]:
+                az["parent_id"] = region["id"]
+                cloned_vpc_id = _unique_container_id(f"{vpc['id']}-{az['id']}")
+                cloned_vpc = {
+                    "id": cloned_vpc_id,
+                    "label": vpc["label"],
+                    "container_type": "vpc",
+                    "parent_id": az["id"],
+                }
+                containers.append(cloned_vpc)
+                container_by_id[cloned_vpc_id] = cloned_vpc
+                for subnet in containers:
+                    if subnet.get("container_type") == "subnet" and subnet.get("parent_id") == az["id"]:
+                        subnet["parent_id"] = cloned_vpc_id
+
+    node_ids = {n["id"] for n in nodes}
+    container_ids = {c["id"] for c in containers}
+    repaired_edges: list[dict] = []
+    for edge in edges:
+        src = edge.get("source")
+        tgt = edge.get("target")
+        kind = edge.get("edge_kind", "traffic")
+        if kind == "replication":
+            unknown_src = src not in node_ids and src not in container_ids
+            unknown_tgt = tgt not in node_ids and tgt not in container_ids
+            if unknown_src or unknown_tgt:
+                logger.warning(
+                    "Dropping invalid replication edge %s -> %s during pre-parse repair",
+                    src, tgt,
+                )
+                continue
+        repaired_edges.append(edge)
+    spec["edges"] = repaired_edges
+
+
 # ── Spec parsing ─────────────────────────────────────────────────────────
 
 def parse_architecture_spec(llm_output: str) -> dict:
@@ -360,6 +966,9 @@ def parse_architecture_spec(llm_output: str) -> dict:
         text = fence_match.group(1).strip()
 
     spec = json.loads(text)
+
+    if "containers" in spec and "template" in spec:
+        _repair_generated_template_spec(spec)
 
     # Validate required keys
     for key in ("title", "diagram_type", "layout", "nodes", "edges"):
@@ -419,8 +1028,40 @@ def parse_architecture_spec(llm_output: str) -> dict:
         if len(region_roots) != 1:
             raise ValueError(f"Must have exactly one root region container, found {len(region_roots)}")
 
-        # Build parent chain for hierarchy checks
+        # Build container_by_id early for hierarchy validation
         container_by_id = {c["id"]: c for c in containers}
+
+        # AZ containers must be direct children of region, not VPC/subnet.
+        for c in containers:
+            if c["container_type"] == "az":
+                pid = c.get("parent_id")
+                if pid:
+                    parent = container_by_id.get(pid)
+                    if parent and parent["container_type"] != "region":
+                        raise ValueError(
+                            f"AZ container '{c['id']}' must not be a child of {parent['container_type']} '{pid}'. "
+                            "AZ must be a child of region (region → az → vpc → subnet)."
+                        )
+
+        # If AZ containers are present, VPCs must sit under AZs rather than directly under region.
+        has_az_container = any(c["container_type"] == "az" for c in containers)
+        for c in containers:
+            if c["container_type"] == "vpc":
+                pid = c.get("parent_id")
+                if not pid:
+                    continue
+                parent = container_by_id.get(pid)
+                if parent and parent["container_type"] not in {"region", "az"}:
+                    raise ValueError(
+                        f"VPC container '{c['id']}' must be under region or az, got {parent['container_type']} '{pid}'."
+                    )
+                if has_az_container and parent and parent["container_type"] == "region":
+                    raise ValueError(
+                        f"VPC container '{c['id']}' must be a child of az when AZ containers are present."
+                    )
+
+        # Build parent chain for hierarchy checks
+        # (container_by_id already built above for AZ validation)
 
         def _ancestor_types(cid: str) -> list[str]:
             types = []
@@ -430,6 +1071,15 @@ def parse_architecture_spec(llm_output: str) -> dict:
                 pid = cur.get("parent_id")
                 cur = container_by_id.get(pid) if pid else None
             return types
+
+        def _ancestor_container_type(cid: str, target_type: str, cbid: dict) -> str | None:
+            cur = cbid.get(cid)
+            while cur:
+                if cur["container_type"] == target_type:
+                    return cur["id"]
+                pid = cur.get("parent_id")
+                cur = cbid.get(pid) if pid else None
+            return None
 
         region_id = region_roots[0]["id"]
         data_subnet_ids = [
@@ -484,14 +1134,23 @@ def parse_architecture_spec(llm_output: str) -> dict:
             if cid not in container_ids:
                 raise ValueError(f"Node {node['id']} references unknown container_id: {cid}")
 
-            # database nodes must be in a data/db subnet
+            # database nodes must be in a data/db subnet (directly or via az/as_group/as_policy)
             if node["type"] == "database":
                 container = container_by_id.get(cid)
-                if not container or container["container_type"] != "subnet":
-                    raise ValueError(f"Database node {node['id']} must be inside a subnet container")
-                subnet_label = container.get("label", "").lower()
+                # Walk up to find the enclosing subnet
+                subnet_ancestor = None
+                cur = container
+                while cur:
+                    if cur["container_type"] == "subnet":
+                        subnet_ancestor = cur
+                        break
+                    pid = cur.get("parent_id")
+                    cur = container_by_id.get(pid) if pid else None
+                if not subnet_ancestor:
+                    raise ValueError(f"Database node {node['id']} must be inside a subnet container (directly or via az/as_group)")
+                subnet_label = subnet_ancestor.get("label", "").lower()
                 if "data" not in subnet_label and "db" not in subnet_label:
-                    raise ValueError(f"Database node {node['id']} must be in a data/db subnet, got '{container.get('label')}'")
+                    raise ValueError(f"Database node {node['id']} must be in a data/db subnet, got '{subnet_ancestor.get('label')}'")
 
             # Warn if non-external node lacks product field (needed for icon rendering)
             if not node.get("product"):
@@ -549,6 +1208,37 @@ def parse_architecture_spec(llm_output: str) -> dict:
             kind = edge.get("edge_kind", "traffic")
             if kind not in VALID_EDGE_KINDS:
                 raise ValueError(f"Invalid edge_kind: {kind}. Must be one of {VALID_EDGE_KINDS}")
+
+            # Reject replication self-loops (source == target)
+            if kind == "replication" and edge["source"] == edge["target"]:
+                raise ValueError(
+                    f"Replication self-loop detected: edge '{edge.get('label', '')}' "
+                    f"has source == target == '{edge['source']}'. "
+                    "Replication edges must connect different nodes (e.g. primary in AZ1 → standby in AZ2)."
+                )
+
+            # Replication edges must be cross-AZ (source and target in different AZs)
+            if kind == "replication":
+                src_node = node_by_id.get(edge["source"])
+                tgt_node = node_by_id.get(edge["target"])
+                if src_node and tgt_node:
+                    src_az = _ancestor_container_type(src_node.get("container_id", ""), "az", container_by_id)
+                    tgt_az = _ancestor_container_type(tgt_node.get("container_id", ""), "az", container_by_id)
+                    if src_az and tgt_az and src_az == tgt_az:
+                        raise ValueError(
+                            f"Replication edge '{edge.get('label', '')}' connects nodes in the same AZ "
+                            f"('{src_az}'). Replication edges must be cross-AZ."
+                        )
+
+        # DR normalization: if any replication edge exists but no az container,
+        # inject AZ1/AZ2 containers and redistribute nodes.
+        has_replication = any(e.get("edge_kind") == "replication" for e in spec["edges"])
+        has_az = any(c["container_type"] == "az" for c in containers)
+        if has_replication and not has_az:
+            logger.warning(
+                "Spec has replication edges but no AZ containers — injecting AZ1/AZ2 for DR structure"
+            )
+            _inject_dr_az_containers(spec, container_by_id, node_by_id)
 
     else:
         # Legacy spec (layers) — backward compat
@@ -739,7 +1429,10 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
 
     def _container_style(ctype: str) -> str:
         cs = CONTAINER_STYLE_MAP.get(ctype, CONTAINER_STYLE_MAP["subnet"])
-        base = "swimlane;html=1;collapsible=0;"
+        # Lighter container: rounded corners, left-aligned label, smaller title
+        base = "swimlane;html=1;collapsible=0;swimlaneLine=0;rounded=1;absoluteArcSize=1;arcSize=12;"
+        # Title font: smaller than body, left-aligned (like external repo)
+        container_title_size = title_font_size - 2
         parts = [
             f"startSize={cs['startSize']}",
             f"fillColor={cs['fill']}",
@@ -747,7 +1440,11 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
             f"strokeWidth={cs.get('strokeWidth', '1')}",
             f"fontStyle={cs['fontStyle']}",
             f"fontFamily={font_family}",
-            f"fontSize={title_font_size}",
+            f"fontSize={container_title_size}",
+            "verticalAlign=top",
+            "align=left",
+            "spacingLeft=10",
+            "spacingTop=4",
         ]
         if cs["dashed"] == "1":
             parts.append("dashed=1")
@@ -758,7 +1455,74 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
     is_template_spec = "containers" in spec and "template" in spec
 
     if is_template_spec:
-        containers = spec["containers"]
+        containers = [dict(c) for c in spec["containers"]]
+        nodes = [dict(n) for n in nodes]
+        edges = [dict(e) for e in edges]
+
+        def _next_local_node_id(base: str) -> str:
+            candidate = base
+            existing = {n["id"] for n in nodes}
+            index = 2
+            while candidate in existing:
+                candidate = f"{base}-{index}"
+                index += 1
+            return candidate
+
+        def _flatten_as_group_containers() -> None:
+            """Render AS groups as a single AS icon instead of a dashed container."""
+            as_groups = [c for c in containers if c["container_type"] == "as_group"]
+            if not as_groups:
+                return
+
+            group_parent: dict[str, str] = {}
+            group_icon_node: dict[str, str] = {}
+            member_to_group: dict[str, str] = {}
+            original_nodes = list(nodes)
+
+            for group in as_groups:
+                parent_id = group.get("parent_id")
+                if not parent_id:
+                    continue
+                group_parent[group["id"]] = parent_id
+                icon_id = _next_local_node_id(f"{group['id']}-icon")
+                icon_node = {
+                    "id": icon_id,
+                    "label": "AS",
+                    "type": "service",
+                    "container_id": parent_id,
+                    "product": "AS",
+                }
+                nodes.append(icon_node)
+                group_icon_node[group["id"]] = icon_id
+
+                for node in original_nodes:
+                    if node.get("container_id") == group["id"]:
+                        node["container_id"] = parent_id
+                        member_to_group[node["id"]] = group["id"]
+
+                for child in containers:
+                    if child.get("parent_id") == group["id"]:
+                        child["parent_id"] = parent_id
+
+            rewritten_edges: list[dict] = []
+            for edge in edges:
+                src_group = member_to_group.get(edge["source"])
+                tgt_group = member_to_group.get(edge["target"])
+                if src_group and tgt_group and src_group == tgt_group:
+                    continue
+                new_edge = dict(edge)
+                if src_group:
+                    new_edge["source"] = group_icon_node[src_group]
+                if tgt_group:
+                    new_edge["target"] = group_icon_node[tgt_group]
+                if new_edge["source"] == new_edge["target"]:
+                    continue
+                rewritten_edges.append(new_edge)
+
+            edges[:] = rewritten_edges
+            containers[:] = [c for c in containers if c["container_type"] != "as_group"]
+
+        _flatten_as_group_containers()
         container_by_id = {c["id"]: c for c in containers}
         node_by_id = {n["id"]: n for n in nodes}
         container_cell_map: dict[str, int] = {}
@@ -780,7 +1544,11 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
         # Track node positions for edge routing: node_id -> (x, y, w, h) absolute
         node_positions: dict[str, tuple[int, int, int, int]] = {}
 
+        _size_cache: dict[str, tuple[int, int]] = {}
+
         def _compute_container_size(cid: str) -> tuple[int, int]:
+            if cid in _size_cache:
+                return _size_cache[cid]
             child_ids = children_of.get(cid, [])
             child_nodes = nodes_by_container.get(cid, [])
             ctype = container_by_id[cid]["container_type"]
@@ -794,12 +1562,18 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
                 )
 
             child_sizes = [_compute_container_size(ch) for ch in child_ids]
-            # VPC always stacks subnets vertically regardless of overall layout
-            effective_lr = is_lr or ctype == "vpc"
-            return compute_container_size(
-                ctype, child_sizes, child_nodes,
-                is_lr=effective_lr, start_size=start_size,
+            # VPC always stacks subnets vertically. Containers whose direct
+            # children are AZs should keep AZ1/AZ2 side-by-side even in LR diagrams.
+            has_az_children = bool(child_ids) and all(
+                container_by_id[ch]["container_type"] == "az" for ch in child_ids
             )
+            stack_vertical = ctype == "vpc" or (is_lr and not has_az_children)
+            result = compute_container_size(
+                ctype, child_sizes, child_nodes,
+                is_lr=is_lr, stack_vertical=stack_vertical, start_size=start_size,
+            )
+            _size_cache[cid] = result
+            return result
 
         # Find root region
         root_id = next(c["id"] for c in containers if c.get("parent_id") is None and c["container_type"] == "region")
@@ -939,8 +1713,12 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
                 )
             child_x = pad_x
             child_y = header_h
-            # VPC always stacks subnets vertically (public > app > data > mgmt)
+            # VPC always stacks subnets vertically (public > app > data).
             vpc_vertical = ctype == "vpc"
+            az_row = bool(child_ids) and all(
+                container_by_id[ch]["container_type"] == "az" for ch in child_ids
+            )
+            stack_vertical = vpc_vertical or (is_lr and not az_row)
 
             for ch_id in child_ids:
                 ch_w, ch_h = _compute_container_size(ch_id)
@@ -952,7 +1730,7 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
                     abs_x + child_x,
                     abs_y + child_y,
                 )
-                if is_lr or vpc_vertical:
+                if stack_vertical:
                     child_y += ch_h + CONTAINER_PADDING_Y
                 else:
                     child_x += ch_w + CONTAINER_PADDING_X
@@ -962,7 +1740,7 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
             if child_nodes:
                 # If we had child containers, place nodes below them
                 if child_ids:
-                    if is_lr or vpc_vertical:
+                    if stack_vertical:
                         node_y_start = child_y
                     else:
                         max_child_h = max(_compute_container_size(ch)[1] for ch in child_ids)
@@ -973,7 +1751,9 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
                 # Use grid layout from hld_layout
                 grid = layout_nodes_in_grid(
                     child_nodes,
-                    area_width=cw - 2 * pad_x,
+                    # layout_nodes_in_grid compares absolute x positions against
+                    # area_width, so the right boundary must include the start_x offset.
+                    area_width=cw - pad_x,
                     max_cols=DEFAULT_MAX_COLS,
                     start_x=pad_x,
                     start_y=node_y_start,
@@ -1394,6 +2174,8 @@ def generate_hld_design(
             {"role": "user", "content": (
                 f"The JSON you output was invalid: {exc}\n"
                 "Please output a corrected Architecture Spec JSON that strictly follows the schema. "
+                "If AZ containers are present, they must be direct children of the region, and each AZ must contain its own VPC and subnets. "
+                "Do not point edges to container ids or placeholder ids such as subnet-*, vpc-*, az-*, or *-dr; every edge source/target must resolve to a node id. "
                 "No markdown fences, no explanation."
             )},
         ]
@@ -1402,6 +2184,10 @@ def generate_hld_design(
         except httpx.ReadTimeout as exc:
             raise RuntimeError("HLD LLM correction timed out while repairing the architecture spec.") from exc
         spec = parse_architecture_spec(llm_output)
+
+    # 3b. Normalize spec based on semantic flags (post-parse safety net)
+    flags = _detect_semantic_flags(requirements)
+    _normalize_spec(spec, flags, requirements)
 
     # 4. Render spec to .drawio XML
     _stage("render_drawio")

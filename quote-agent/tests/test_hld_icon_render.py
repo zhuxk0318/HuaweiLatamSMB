@@ -92,35 +92,85 @@ class TestHwcIconMapping:
     def test_empty_product_returns_none(self):
         assert resolve_product_icon_title("") is None
 
+    # ── New synonym / normalization coverage ────────────────────────────
+
+    @pytest.mark.parametrize("product,expected_title", [
+        # SFS / shared storage
+        ("shared file", "Scalable File Service (SFS)"),
+        ("shared files", "Scalable File Service (SFS)"),
+        ("file share", "Scalable File Service (SFS)"),
+        ("nas", "Scalable File Service (SFS)"),
+        ("nfs", "Scalable File Service (SFS)"),
+        ("SFS Turbo", "Scalable File Service (SFS) Turbo"),
+        # RDS / MySQL
+        ("mysql", "RDS for MySQL"),
+        ("RDS MySQL primary", "RDS for MySQL"),
+        ("RDS for MySQL", "RDS for MySQL"),
+        # DCS / Redis
+        ("Redis cache", "Distributed Cache Service (DCS) for Redis"),
+        ("redis", "Distributed Cache Service (DCS) for Redis"),
+        # Direct Connect
+        ("Direct Connect", "Direct Connect"),
+        ("dedicated line", "Direct Connect"),
+        ("private line", "Direct Connect"),
+        # DRS
+        ("database replication service", "Data Replication Service (DRS)"),
+        ("drs", "Data Replication Service (DRS)"),
+        # CBR / Backup
+        ("backup", "Cloud Backup and Recovery (CBR)"),
+        ("backup copy", "Cloud Backup and Recovery (CBR)"),
+        # SDRS
+        ("disaster recovery", "Storage Disaster Recovery Service (SDRS)"),
+    ])
+    def test_new_synonyms(self, product, expected_title):
+        assert resolve_product_icon_title(product) == expected_title
+
+    @pytest.mark.parametrize("product,expected_title", [
+        # Role suffix stripping
+        ("ECS primary", "Elastic Cloud Server (ECS)"),
+        ("RDS standby", "Relational Database Service (RDS)"),
+        ("RDS MySQL replica", "RDS for MySQL"),
+        ("DCS (primary)", "Distributed Cache Service (DCS) for Redis"),
+        # Separator normalization
+        ("rds-mysql", "RDS for MySQL"),
+        ("sfs_turbo", "Scalable File Service (SFS) Turbo"),
+        ("auto_scaling", "Auto Scaling (AS)"),
+        # Case insensitivity on synonyms
+        ("Shared File", "Scalable File Service (SFS)"),
+        ("NAS", "Scalable File Service (SFS)"),
+    ])
+    def test_normalization(self, product, expected_title):
+        assert resolve_product_icon_title(product) == expected_title
+
 
 # ── Container style tests ───────────────────────────────────────────────
 
 class TestContainerStyles:
     def test_vpc_colors(self):
         cs = CONTAINER_STYLE_MAP["vpc"]
-        assert cs["fill"] == "#FFE6E6"
-        assert cs["outline"] == "#E85D4D"
+        assert cs["fill"] == "none"
+        assert cs["outline"] == "#f85835"
 
     def test_subnet_colors(self):
         cs = CONTAINER_STYLE_MAP["subnet"]
-        assert cs["fill"] == "#E6F7E6"
-        assert cs["outline"] == "#7ED321"
+        assert cs["fill"] == "#f5f5f5"
+        assert cs["outline"] == "#999999"
 
     def test_az_blue_dashed(self):
         cs = CONTAINER_STYLE_MAP["az"]
-        assert cs["outline"] == "#4A90E2"
+        assert cs["outline"] == "#3298ff"
         assert cs["dashed"] == "1"
         assert cs["dashPattern"] == "5 5"
 
     def test_as_group_blue_dashed(self):
         cs = CONTAINER_STYLE_MAP["as_group"]
-        assert cs["outline"] == "#4A90E2"
+        assert cs["outline"] == "#3298ff"
         assert cs["dashed"] == "1"
         assert cs["dashPattern"] == "5 5"
 
     def test_as_policy_blue_dashed(self):
         cs = CONTAINER_STYLE_MAP["as_policy"]
-        assert cs["outline"] == "#4A90E2"
+        assert cs["outline"] == "#3298ff"
         assert cs["dashed"] == "1"
         assert cs["dashPattern"] == "5 5"
 
@@ -238,7 +288,7 @@ class TestIconicRendering:
         spec = parse_architecture_spec(json.dumps(_make_iconic_spec()))
         style = _load_style_preset()
         xml = render_spec_to_drawio_xml(spec, style)
-        assert "strokeWidth=2" in xml
+        assert "strokeWidth=1" in xml
 
 
 import json

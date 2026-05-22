@@ -327,9 +327,12 @@ class TestRenderedNonOverlap:
 
     def test_az_group_nodes_no_overlap(self):
         spec = _make_template_spec()
-        spec["containers"].append({"id": "az-1", "label": "AZ1", "container_type": "az", "parent_id": "subnet-app"})
-        spec["nodes"].append({"id": "ecs2", "label": "ECS-HA", "type": "service", "container_id": "az-1", "product": "ECS"})
-        spec["nodes"].append({"id": "ecs3", "label": "ECS-HA2", "type": "service", "container_id": "az-1", "product": "ECS"})
+        # AZ under VPC (correct hierarchy)
+        spec["containers"].append({"id": "az-1", "label": "AZ1", "container_type": "az", "parent_id": "vpc-1"})
+        # Move app subnet under AZ1
+        spec["containers"][3]["parent_id"] = "az-1"  # subnet-app
+        spec["nodes"].append({"id": "ecs2", "label": "ECS-HA", "type": "service", "container_id": "subnet-app", "product": "ECS"})
+        spec["nodes"].append({"id": "ecs3", "label": "ECS-HA2", "type": "service", "container_id": "subnet-app", "product": "ECS"})
         style = _load_style_preset()
         xml = render_spec_to_drawio_xml(spec, style)
         geoms = self._extract_node_geometries(xml)
@@ -351,7 +354,7 @@ class TestContainerSizing:
         fallback_nodes = [{"id": "n1", "product": None}]
         w_i, h_i = compute_container_size("subnet", [], icon_nodes)
         w_f, h_f = compute_container_size("subnet", [], fallback_nodes)
-        # Icon box is taller (110 vs 50)
+        # Icon box remains taller than fallback shapes.
         assert h_i > h_f
 
 
@@ -571,14 +574,17 @@ class TestLogicalGroupPadding:
     def test_group_nodes_no_overlap(self):
         """Nodes inside an AZ group should not overlap."""
         spec = _make_template_spec()
+        # AZ under VPC (correct hierarchy)
         spec["containers"].append(
-            {"id": "az-1", "label": "AZ1", "container_type": "az", "parent_id": "subnet-app"}
+            {"id": "az-1", "label": "AZ1", "container_type": "az", "parent_id": "vpc-1"}
+        )
+        # Move app subnet under AZ1
+        spec["containers"][3]["parent_id"] = "az-1"  # subnet-app
+        spec["nodes"].append(
+            {"id": "ecs2", "label": "ECS-HA", "type": "service", "container_id": "subnet-app", "product": "ECS"}
         )
         spec["nodes"].append(
-            {"id": "ecs2", "label": "ECS-HA", "type": "service", "container_id": "az-1", "product": "ECS"}
-        )
-        spec["nodes"].append(
-            {"id": "ecs3", "label": "ECS-HA2", "type": "service", "container_id": "az-1", "product": "ECS"}
+            {"id": "ecs3", "label": "ECS-HA2", "type": "service", "container_id": "subnet-app", "product": "ECS"}
         )
         style = _load_style_preset()
         xml = render_spec_to_drawio_xml(spec, style)
@@ -696,3 +702,189 @@ class TestEdgeRenderingConstraints:
 
         for edge in edges:
             assert len(edge["points"]) <= 2, f"edge should use shortest orthogonal path: {edge['points']}"
+
+
+# ── Lighter container style rendering ────────────────────────────────────
+
+class TestLighterContainerStyle:
+    """Verify the lighter boundary-partition container styles render correctly."""
+
+    def test_region_dashed_renders(self):
+        spec = _make_template_spec()
+        style = _load_style_preset()
+        xml = render_spec_to_drawio_xml(spec, style)
+        # Region should have dashed=1 in its style
+        assert "dashed=1" in xml
+        # Should have left-aligned title
+        assert "align=left" in xml
+        # Swimlane title separator should be removed
+        assert "swimlaneLine=0" in xml
+        # Should have smaller startSize (<=20)
+        assert "startSize=18" in xml or "startSize=16" in xml
+
+    def test_no_heavy_fill_in_region(self):
+        """Region/VPC/AZ containers should not have heavy fill colors."""
+        spec = _make_template_spec()
+        style = _load_style_preset()
+        xml = render_spec_to_drawio_xml(spec, style)
+        # fillColor=none should appear for region/vpc
+        assert "fillColor=none" in xml
+
+    def test_layout_still_non_overlapping(self):
+        """Lighter styles should not break non-overlap guarantee."""
+        spec = _make_template_spec()
+        style = _load_style_preset()
+        xml = render_spec_to_drawio_xml(spec, style)
+        geoms = TestRenderedNonOverlap()._extract_node_geometries(xml)
+        TestRenderedNonOverlap()._check_leaf_no_overlap(geoms)
+
+
+class TestASGroupRendering:
+    def test_as_group_renders_as_icon_not_empty_container(self):
+        spec = _make_template_spec()
+        spec["containers"].append({"id": "asg-1", "label": "AS Group", "container_type": "as_group", "parent_id": "subnet-app"})
+        spec["nodes"].append({"id": "ecs-as-1", "label": "ECS-AS-1", "type": "service", "container_id": "asg-1", "product": "ECS"})
+        spec["nodes"].append({"id": "ecs-as-2", "label": "ECS-AS-2", "type": "service", "container_id": "asg-1", "product": "ECS"})
+        style = _load_style_preset()
+        xml = render_spec_to_drawio_xml(spec, style)
+        geoms = TestRenderedNonOverlap()._extract_node_geometries(xml)
+        assert "AS" in geoms
+        assert "AS Group" not in geoms
+        assert "ECS-AS-1" in geoms
+        assert "ECS-AS-2" in geoms
+
+
+# ── DR 3-section skeleton ───────────────────────────────────────────────
+
+class TestDR3SectionSkeleton:
+    """DR scenarios should render AZ1/AZ2 as side-by-side region children."""
+
+    def _make_dr_spec(self) -> dict:
+        spec = _make_template_spec()
+        spec["containers"].append({"id": "az-1", "label": "AZ1", "container_type": "az", "parent_id": "region-1"})
+        spec["containers"].append({"id": "az-2", "label": "AZ2", "container_type": "az", "parent_id": "region-1"})
+        spec["containers"][1]["parent_id"] = "az-1"
+        spec["containers"].append({"id": "vpc-1-az2", "label": "VPC", "container_type": "vpc", "parent_id": "az-2"})
+        spec["containers"].append({"id": "subnet-fe-az2", "label": "Frontend Subnet", "container_type": "subnet", "parent_id": "vpc-1-az2"})
+        spec["containers"].append({"id": "subnet-app-az2", "label": "Application Subnet", "container_type": "subnet", "parent_id": "vpc-1-az2"})
+        spec["containers"].append({"id": "subnet-data-az2", "label": "Data Subnet", "container_type": "subnet", "parent_id": "vpc-1-az2"})
+        spec["nodes"].append({"id": "rds-az2", "label": "RDS", "type": "database", "container_id": "subnet-data-az2", "product": "RDS"})
+        spec["edges"].append({"source": "rds", "target": "rds-standby", "label": "DR Sync", "edge_kind": "replication"})
+        spec["nodes"].append({"id": "cbr", "label": "CBR", "type": "service", "container_id": "subnet-data", "product": "CBR"})
+        spec["edges"][-1]["target"] = "rds-az2"
+        return spec
+
+    def test_dr_spec_renders(self):
+        spec = self._make_dr_spec()
+        style = _load_style_preset()
+        xml = render_spec_to_drawio_xml(spec, style)
+        assert "<mxfile>" in xml
+        assert "AZ1" in xml
+        assert "AZ2" in xml
+
+    def test_az_containers_render_side_by_side(self):
+        spec = self._make_dr_spec()
+        style = _load_style_preset()
+        xml = render_spec_to_drawio_xml(spec, style)
+        geoms = TestRenderedNonOverlap()._extract_node_geometries(xml)
+        az1 = geoms["AZ1"]
+        az2 = geoms["AZ2"]
+        assert az1[0] < az2[0], f"AZ1 should be left of AZ2: {az1} vs {az2}"
+        assert abs(az1[1] - az2[1]) <= 2, f"AZ containers should be horizontally aligned: {az1} vs {az2}"
+
+
+class TestCompactSingleRowContainerHeight:
+    def test_single_icon_subnet_height_is_compact(self):
+        spec = {
+            "title": "Compact Height Test",
+            "diagram_type": "architecture",
+            "template": "layered_horizontal",
+            "layout": "TB",
+            "containers": [
+                {"id": "region-1", "label": "Region", "container_type": "region", "parent_id": None},
+                {"id": "vpc-1", "label": "VPC", "container_type": "vpc", "parent_id": "region-1"},
+                {"id": "subnet-app", "label": "Application Subnet", "container_type": "subnet", "parent_id": "vpc-1"},
+            ],
+            "nodes": [
+                {"id": "ecs", "label": "ECS", "type": "service", "container_id": "subnet-app", "product": "ECS"},
+            ],
+            "edges": [],
+        }
+        style = _load_style_preset()
+        xml = render_spec_to_drawio_xml(spec, style)
+        geoms = TestRenderedNonOverlap()._extract_node_geometries(xml)
+        subnet_h = geoms["Application Subnet"][3]
+        assert 120 <= subnet_h <= 140, f"single-row icon container should be compact, got {subnet_h}"
+
+    def test_dr_subnets_in_vertical_order(self):
+        """Within one AZ VPC, business subnets should still stack vertically."""
+        spec = TestDR3SectionSkeleton()._make_dr_spec()
+        style = _load_style_preset()
+        xml = render_spec_to_drawio_xml(spec, style)
+        positions = TestSubnetVerticalStacking()._extract_container_y_positions(xml)
+        # At minimum, frontend should be above data
+        y_fe = positions.get("Frontend Subnet")
+        y_data = positions.get("Data Subnet")
+        assert y_fe is not None
+        assert y_data is not None
+        assert y_fe < y_data
+
+
+# ── Cross-cutting ops node separation ───────────────────────────────────
+
+class TestOpsNodeSeparation:
+    """DR normalization should not inject or depend on a management subnet."""
+
+    def test_ops_nodes_not_moved_to_mgmt_subnet(self):
+        from app.hld_workflow import _normalize_spec, SemanticFlags
+        spec = _make_template_spec()
+        spec["nodes"].append({"id": "cbr", "label": "CBR", "type": "service", "container_id": "subnet-data", "product": "CBR"})
+        spec["nodes"].append({"id": "ces", "label": "CES", "type": "service", "container_id": "subnet-app", "product": "CES"})
+        flags = SemanticFlags(has_dr=True)
+        from app.models import HldRequirements
+        req = HldRequirements(
+            project_name="Test", business_goal="disaster recovery", architecture_boundary="Cloud only",
+            deployment_mode="cloud", user_access_entry="Internet", core_components="ECS, RDS",
+            external_integrations="None", data_stores_flow="RDS MySQL", network_security_boundary="VPC",
+        )
+        _normalize_spec(spec, flags, req)
+        cbr_node = next(n for n in spec["nodes"] if n["id"] == "cbr")
+        ces_node = next(n for n in spec["nodes"] if n["id"] == "ces")
+        assert cbr_node["container_id"] == "subnet-data"
+        assert ces_node["container_id"] == "subnet-app"
+        mgmt_subnets = [c for c in spec["containers"] if c["id"] == "subnet-mgmt"]
+        assert len(mgmt_subnets) == 0
+
+    def test_ops_nodes_not_moved_for_non_dr(self):
+        """Without DR/hybrid, ops nodes stay where they are (no mgmt subnet injected)."""
+        from app.hld_workflow import _normalize_spec, SemanticFlags
+        spec = _make_template_spec()
+        spec["nodes"].append({"id": "ces", "label": "CES", "type": "service", "container_id": "subnet-app", "product": "CES"})
+        flags = SemanticFlags()  # no flags
+        from app.models import HldRequirements
+        req = HldRequirements(
+            project_name="Test", business_goal="Build a portal", architecture_boundary="Cloud only",
+            deployment_mode="cloud", user_access_entry="Internet", core_components="ECS, RDS",
+            external_integrations="None", data_stores_flow="RDS MySQL", network_security_boundary="VPC",
+        )
+        _normalize_spec(spec, flags, req)
+        # No mgmt subnet should be injected
+        mgmt_subnets = [c for c in spec["containers"] if c["id"] == "subnet-mgmt"]
+        assert len(mgmt_subnets) == 0
+
+    def test_existing_mgmt_subnet_not_used(self):
+        """Even if a management subnet exists, ops nodes should not be moved there."""
+        from app.hld_workflow import _normalize_spec, SemanticFlags
+        spec = _make_template_spec()
+        spec["containers"].append({"id": "subnet-mgmt", "label": "Management Subnet", "container_type": "subnet", "parent_id": "vpc-1"})
+        spec["nodes"].append({"id": "smn", "label": "SMN", "type": "service", "container_id": "subnet-app", "product": "SMN"})
+        flags = SemanticFlags(has_dr=True)
+        from app.models import HldRequirements
+        req = HldRequirements(
+            project_name="Test", business_goal="disaster recovery", architecture_boundary="Cloud only",
+            deployment_mode="cloud", user_access_entry="Internet", core_components="ECS, RDS",
+            external_integrations="None", data_stores_flow="RDS MySQL", network_security_boundary="VPC",
+        )
+        _normalize_spec(spec, flags, req)
+        smn_node = next(n for n in spec["nodes"] if n["id"] == "smn")
+        assert smn_node["container_id"] == "subnet-app"

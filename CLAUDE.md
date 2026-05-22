@@ -128,6 +128,26 @@ Huawei LATAM SMB Solutions portal — a React SPA showcasing cloud migration, AI
   - orthogonal edges should avoid crossing node centers when practical
 - For layout changes, keep scope in the backend renderer. Do not redesign the HLD wizard unless the task explicitly asks for it.
 
+### Current HLD fix target: DR site did not become 2AZ
+
+- Current confirmed issue:
+  - a user mentioned `disaster recovery site`, but the generated HLD did not produce `AZ1/AZ2` or equivalent two-AZ DR topology
+  - instead, the latest generated `.drawio` showed `DR Replication` self-loop edges on individual nodes
+- Treat this as a backend HLD generation/spec-validation problem first, not a frontend problem and not primarily a renderer/layout problem.
+- Start with the smallest relevant context only:
+  1. `quote-agent/app/hld_workflow.py`
+  2. one fresh generated `.drawio` under `/tmp/hld-designs/`
+  3. the most focused HLD test file you need
+- Working hypothesis:
+  - prompt/schema currently allows `replication` edges for DR but does not require `az` containers or two-site structure when requirements mention DR/HA/standby/secondary site
+  - parse/validation may also collapse container-level DR edges into node-level self-loops
+- For this issue, prefer fixes in this order:
+  1. strengthen backend spec-generation constraints in `hld_workflow.py`
+  2. add/adjust backend validation or normalization so DR requirements map to explicit multi-AZ structure
+  3. add focused tests proving DR keywords yield 2AZ-style containers and no self-loop replication edges
+- Do not broaden into chat portal, pricing, deployment, or unrelated frontend cleanup.
+- If online verification is needed after backend changes, remember the backend service must be restarted.
+
 ### API endpoints
 
 **Chat**
