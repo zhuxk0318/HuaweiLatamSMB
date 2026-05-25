@@ -3,7 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 ActionType = Literal["quote", "exclude_powered_off", "manual_review"]
@@ -493,6 +493,28 @@ class HldRequirements(BaseModel):
     preferred_filename: str | None = None
     language: LangKey = "en"
     design_bias: HldDesignBias = "huawei"
+
+    @field_validator("deployment_mode", mode="before")
+    @classmethod
+    def normalize_deployment_mode(cls, value: str) -> str:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip().lower()
+        aliases = {
+            "cloud": "cloud",
+            "nube": "cloud",
+            "云": "cloud",
+            "hybrid": "hybrid",
+            "híbrido": "hybrid",
+            "hibrido": "hybrid",
+            "混合": "hybrid",
+            "on-prem": "on-prem",
+            "on prem": "on-prem",
+            "on-premises": "on-prem",
+            "on premises": "on-prem",
+            "本地": "on-prem",
+        }
+        return aliases.get(normalized, value)
 
 
 class HldDesignTaskCreatedResponse(BaseModel):

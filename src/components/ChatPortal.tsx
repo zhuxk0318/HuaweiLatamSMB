@@ -143,6 +143,27 @@ const copy = {
     streaming: "正在回复...",
     webSearch: "联网搜索",
   },
+  pg: {
+    productName: "Huawei LATAM SMB Advisor",
+    welcomePrompt: "Por onde começamos?",
+    capabilityChips: ["Soluções", "Cotação", "Adoção Cloud"],
+    placeholder: "Pergunte sobre soluções PME, preços, migração, saúde ou carregue um arquivo para orientação de cotação...",
+    send: "Enviar",
+    newChat: "Nova conversa",
+    upload: "Carregar arquivos",
+    uploading: "Carregando...",
+    uploads: "Arquivos anexados",
+    removeFile: "Remover arquivo",
+    errorSession: "Não foi possível inicializar a conversa.",
+    errorStream: "Não foi possível obter resposta do assistente.",
+    assistant: "Assistente",
+    user: "Você",
+    open: "Abrir",
+    askThis: "Perguntar isso",
+    fileReceived: "Arquivo carregado e pronto para referência na conversa.",
+    streaming: "Respondendo...",
+    webSearch: "Busca na web",
+  },
 } satisfies Record<Lang, {
   productName: string;
   welcomePrompt: string;
@@ -173,34 +194,35 @@ const hldCopy: Record<Lang, { generating: string; back: string; retry: string; e
   en: { generating: "Generating HLD diagram…", back: "Back", retry: "Retry generation", editAnswers: "Edit answers" },
   es: { generating: "Generando diagrama HLD…", back: "Volver", retry: "Reintentar generación", editAnswers: "Editar respuestas" },
   zh: { generating: "正在生成 HLD 图…", back: "返回", retry: "重试生成", editAnswers: "修改答案" },
+  pg: { generating: "Gerando diagrama HLD…", back: "Voltar", retry: "Tentar novamente", editAnswers: "Editar respostas" },
 };
 
 const capabilityEntries = [
   {
     key: "pricing",
     label: "Pricing",
-    description: { en: "Estimate cloud costs from RVTools or requirements", es: "Estime costos cloud desde RVTools o requerimientos", zh: "基于 RVTools 或需求估算云成本" },
+    description: { en: "Estimate cloud costs from RVTools or requirements", es: "Estime costos cloud desde RVTools o requerimientos", zh: "基于 RVTools 或需求估算云成本", pg: "Estime custos cloud desde RVTools ou requisitos" },
     href: "#/estimator",
     icon: Calculator,
   },
   {
     key: "solution",
     label: "Solution",
-    description: { en: "Browse AI and cloud solution scenarios", es: "Explore escenarios de soluciones AI y cloud", zh: "浏览 AI 与云方案场景" },
+    description: { en: "Browse AI and cloud solution scenarios", es: "Explore escenarios de soluciones AI y cloud", zh: "浏览 AI 与云方案场景", pg: "Explore cenários de soluções AI e cloud" },
     href: "#/solutions",
     icon: Layers3,
   },
   {
     key: "migration",
     label: "Migration",
-    description: { en: "Migration and modernization paths", es: "Rutas de migración y modernización", zh: "迁移与现代化路径" },
+    description: { en: "Migration and modernization paths", es: "Rutas de migración y modernización", zh: "迁移与现代化路径", pg: "Rotas de migração e modernização" },
     href: "#/migration",
     icon: ArrowUp,
   },
   {
     key: "hld",
     label: "HLD Design",
-    description: { en: "Generate high-level architecture diagrams", es: "Genere diagramas de arquitectura de alto nivel", zh: "生成高层架构设计图" },
+    description: { en: "Generate high-level architecture diagrams", es: "Genere diagramas de arquitectura de alto nivel", zh: "生成高层架构设计图", pg: "Gere diagramas de arquitetura de alto nível" },
     href: "#/hld",
     icon: LayoutDashboard,
   },
@@ -606,6 +628,9 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
         )}
         <div className="chat-portal-actions">
           <div className="language-toggle chat-language-toggle" aria-label="Language">
+            {/* <button type="button" className={lang === "pg" ? "active" : ""} onClick={() => setLang("pg")}>
+              PG
+            </button> */}
             <button type="button" className={lang === "es" ? "active" : ""} onClick={() => setLang("es")}>
               ES
             </button>

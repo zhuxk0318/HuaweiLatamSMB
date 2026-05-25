@@ -113,6 +113,10 @@ class TestHwcIconMapping:
         ("Direct Connect", "Direct Connect"),
         ("dedicated line", "Direct Connect"),
         ("private line", "Direct Connect"),
+        # VPN
+        ("vpn gateway", "Virtual Private Network (VPN)"),
+        ("site to site vpn", "Virtual Private Network (VPN)"),
+        ("site-to-site vpn", "Virtual Private Network (VPN)"),
         # DataArts / CDM
         ("DataArts", "DataArts Studio"),
         ("DataArts Studio", "DataArts Studio"),

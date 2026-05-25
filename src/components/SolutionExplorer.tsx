@@ -53,6 +53,18 @@ const labels = {
     openOfficial: "打开官方方案",
     externalBadge: "外部链接",
   },
+  pg: {
+    kicker: "Solution Playbook",
+    title: "Start from business needs. Deliver with ready-to-use scenarios.",
+    body:
+      "Explore practical AI and cloud solutions for SMBs, with scenario guidance, GitHub skills, and quick integration paths.",
+    allScenarios: "Scenarios in this solution area",
+    viewSolution: "View solution",
+    viewSkill: "View demo / skill",
+    quickIntegration: "Quick integration",
+    openOfficial: "Open official solution",
+    externalBadge: "External link",
+  },
 } satisfies Record<
   Lang,
   {

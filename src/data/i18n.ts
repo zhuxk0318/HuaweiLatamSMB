@@ -1,4 +1,4 @@
-export type Lang = "es" | "en" | "zh";
+export type Lang = "es" | "en" | "zh" | "pg";
 
 type Copy = {
   nav: {
@@ -296,6 +296,92 @@ export const copy: Record<Lang, Copy> = {
         label: "LATAM Regions",
         href: "https://support.huaweicloud.com/intl/en-us/productdesc-cc/cc_01_0003.html",
         description: "包含拉美在内的华为云区域信息。",
+      },
+    ],
+  },
+  pg: {
+    nav: {
+      home: "Início",
+      highlights: "Destaques",
+      solutions: "Soluções",
+      quote: "Cotação cloud",
+      journey: "Roteiro",
+      resources: "Recursos",
+    },
+    hero: {
+      eyebrow: "Huawei LATAM SMB Solutions",
+      title: "Soluções digitais para PMEs na América Latina",
+      body:
+        "Impulsione a digitalização com capacidades de nuvem, IA, dados, segurança, conectividade e aplicações empresariais projetadas para pequenas e médias empresas na região.",
+      primary: "Ver destaques",
+      secondary: "Explorar soluções",
+    },
+    stats: [
+      { label: "Presença global", value: "170+", note: "Países e regiões onde a Huawei opera" },
+      { label: "Pessoas atendidas", value: "3B+", note: "Usuários servidos por soluções Huawei" },
+      { label: "Capacidade LATAM", value: "5", note: "Regiões de nuvem para cenários locais" },
+      { label: "Módulos", value: "48", note: "Portfólio organizado por necessidade de negócio" },
+    ],
+    sections: {
+      latam: "Base digital para o crescimento de PMEs na LATAM",
+      latamBody:
+        "A proposta combina capacidades de nuvem, IA, dados, segurança, conectividade e aplicações para cenários frequentes: sites e apps, ERP/SAP, backup, filiais, automação e analytics.",
+      highlights: "O mais relevante para PMEs",
+      highlightsBody:
+        "Resumo executivo de prioridades digitais para pequenas e médias empresas na América Latina.",
+      solutions: "Solution Playbook para PME",
+      solutionsBody:
+        "Comece por três portas de entrada comerciais e converta a conversão em oito cenários concretos com skill de GitHub, proposta de valor e passos rápidos de integração.",
+      journey: "Roteiro digital recomendado para PME",
+      journeyBody:
+        "Uma PME não precisa adotar tudo de uma vez. A rota prioriza uma base segura, processos críticos, dados e depois IA com medição.",
+      resources: "Recursos públicos",
+    },
+    solutions: {
+      cards: "módulos",
+      services: "Serviços sugeridos",
+      detail: "Ver detalhes",
+      guidance: "Como começar",
+      outcomes: "Indicadores de sucesso",
+      close: "Fechar",
+    },
+    journey: [
+      {
+        title: "1. Avaliar a oportunidade",
+        body: "Identificar processos, filiais, cargas, riscos, custos e dados onde uma solução digital gera valor imediato.",
+      },
+      {
+        title: "2. Construir a base",
+        body: "Definir conectividade, identidade, segurança, backup e monitoramento antes de modernizar processos críticos.",
+      },
+      {
+        title: "3. Migrar e modernizar",
+        body: "Executar ondas por prioridade: websites, apps, ERP/SAP, bancos de dados e contêineres.",
+      },
+      {
+        title: "4. Ativar dados e IA",
+        body: "Centralizar dados, criar bases de conhecimento empresariais e lançar casos de IA mensuráveis.",
+      },
+      {
+        title: "5. Otimizar e escalar",
+        body: "Medir disponibilidade, custo e produtividade para ampliar as soluções que geram mais valor.",
+      },
+    ],
+    resources: [
+      {
+        label: "Huawei Cloud International",
+        href: "https://www.huaweicloud.com/intl/en-us/",
+        description: "Produtos, soluções e casos publicados no portal internacional.",
+      },
+      {
+        label: "Global Infrastructure",
+        href: "https://www.huaweicloud.com/intl/en-us/about/global-infrastructure.html",
+        description: "Cobertura global, regiões, AZ, POP e rede.",
+      },
+      {
+        label: "LATAM Regions",
+        href: "https://support.huaweicloud.com/intl/en-us/productdesc-cc/cc_01_0003.html",
+        description: "Regiões da Huawei Cloud por geografia, incluindo LATAM.",
       },
     ],
   },

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { ArrowRight, ArrowLeft, Check, X, RefreshCw, LoaderCircle } from "lucide-react";
 
-type Lang = "es" | "en" | "zh";
+type Lang = "es" | "en" | "zh" | "pg";
 type RecSource = "static" | "rule" | "llm" | "fallback_default";
 
 export type HldRequirements = {
@@ -25,7 +25,6 @@ const STEP_ORDER: WizardStep[] = [
   "project_name",
   "business_goal",
   "architecture_boundary",
-  "deployment_mode",
   "user_access_entry",
   "core_components",
   "external_integrations",
@@ -45,59 +44,59 @@ interface StepMeta {
 
 const stepMeta: Record<WizardStep, StepMeta> = {
   project_name: {
-    question: { en: "What is the project or system name?", es: "¿Cuál es el nombre del proyecto?", zh: "项目或系统名称是什么？" },
-    helper: { en: "A short name to identify this architecture, e.g. 'Customer Portal Migration'", es: "Un nombre corto para identificar esta arquitectura", zh: "用于识别此架构的简短名称" },
-    placeholder: { en: "e.g. Cloud Migration Phase 1", es: "ej. Migración Cloud Fase 1", zh: "例如 云迁移第一阶段" },
+    question: { en: "What is the project or system name?", es: "¿Cuál es el nombre del proyecto?", zh: "项目或系统名称是什么？" , pg: "What is the project or system name?" },
+    helper: { en: "A short name to identify this architecture, e.g. 'Customer Portal Migration'", es: "Un nombre corto para identificar esta arquitectura", zh: "用于识别此架构的简短名称" , pg: "A short name to identify this architecture, e.g. 'Customer Portal Migration'" },
+    placeholder: { en: "e.g. Cloud Migration Phase 1", es: "ej. Migración Cloud Fase 1", zh: "例如 云迁移第一阶段" , pg: "e.g. Cloud Migration Phase 1" },
   },
   business_goal: {
-    question: { en: "What business problem are you solving?", es: "¿Qué problema del negocio busca resolver?", zh: "您要解决什么业务问题？" },
-    helper: { en: "Describe the goal in plain language — cost reduction, compliance, performance, new service launch, etc.", es: "Describa el objetivo en lenguaje simple — reducir costos, cumplimiento, rendimiento, etc.", zh: "用通俗语言描述目标 — 降低成本、合规、性能、新服务上线等" },
-    placeholder: { en: "e.g. Reduce infrastructure cost by 30%", es: "ej. Reducir costos de infraestructura en 30%", zh: "例如 降低基础设施成本30%" },
+    question: { en: "What business problem are you solving?", es: "¿Qué problema del negocio busca resolver?", zh: "您要解决什么业务问题？" , pg: "What business problem are you solving?" },
+    helper: { en: "Describe the goal in plain language — cost reduction, compliance, performance, new service launch, etc.", es: "Describa el objetivo en lenguaje simple — reducir costos, cumplimiento, rendimiento, etc.", zh: "用通俗语言描述目标 — 降低成本、合规、性能、新服务上线等" , pg: "Describe the goal in plain language — cost reduction, compliance, performance, new service launch, etc." },
+    placeholder: { en: "e.g. Reduce infrastructure cost by 30%", es: "ej. Reducir costos de infraestructura en 30%", zh: "例如 降低基础设施成本30%" , pg: "e.g. Reduce infrastructure cost by 30%" },
   },
   architecture_boundary: {
-    question: { en: "What parts of the system are in scope?", es: "¿Qué partes del sistema están en alcance?", zh: "系统的哪些部分在范围内？" },
-    helper: { en: "Which layers are you designing — just the app, or also network and deployment?", es: "¿Qué capas está diseñando — solo la aplicación, o también red y despliegue?", zh: "您在设计哪些层 — 仅应用，还是网络和部署？" },
-    placeholder: { en: "e.g. Application / Platform / Network", es: "ej. Aplicación / Plataforma / Red", zh: "例如 应用 / 平台 / 网络" },
+    question: { en: "What parts of the system are in scope?", es: "¿Qué partes del sistema están en alcance?", zh: "系统的哪些部分在范围内？" , pg: "What parts of the system are in scope?" },
+    helper: { en: "Which layers are you designing — just the app, or also network and deployment?", es: "¿Qué capas está diseñando — solo la aplicación, o también red y despliegue?", zh: "您在设计哪些层 — 仅应用，还是网络和部署？" , pg: "Which layers are you designing — just the app, or also network and deployment?" },
+    placeholder: { en: "e.g. Application / Platform / Network", es: "ej. Aplicación / Plataforma / Red", zh: "例如 应用 / 平台 / 网络" , pg: "e.g. Application / Platform / Network" },
   },
   deployment_mode: {
-    question: { en: "What is the deployment model?", es: "¿Cuál es el modelo de despliegue?", zh: "部署模式是什么？" },
-    helper: { en: "Cloud-native, hybrid (cloud + on-prem), or on-premises", es: "Nativo en la nube, híbrido (nube + on-prem) o on-premises", zh: "云原生、混合（云+本地）或本地部署" },
-    placeholder: { en: "e.g. cloud", es: "ej. nube", zh: "例如 云" },
+    question: { en: "", es: "", zh: "" , pg: "" },
+    helper: { en: "", es: "", zh: "" , pg: "" },
+    placeholder: { en: "", es: "", zh: "" , pg: "" },
   },
   user_access_entry: {
-    question: { en: "How do users reach the system?", es: "¿Cómo acceden los usuarios al sistema?", zh: "用户如何访问系统？" },
-    helper: { en: "Through a web browser? Mobile app? VPN? API calls from partners?", es: "¿Por navegador web? App móvil? VPN? Llamadas API de socios?", zh: "通过浏览器？移动应用？VPN？合作伙伴API调用？" },
-    placeholder: { en: "e.g. Web and Mobile via ELB + WAF", es: "ej. Web y Móvil vía ELB + WAF", zh: "例如 通过 ELB + WAF 访问" },
+    question: { en: "How do users reach the system?", es: "¿Cómo acceden los usuarios al sistema?", zh: "用户如何访问系统？" , pg: "How do users reach the system?" },
+    helper: { en: "Through a web browser? Mobile app? VPN? API calls from partners?", es: "¿Por navegador web? App móvil? VPN? Llamadas API de socios?", zh: "通过浏览器？移动应用？VPN？合作伙伴API调用？" , pg: "Through a web browser? Mobile app? VPN? API calls from partners?" },
+    placeholder: { en: "e.g. Web and Mobile via ELB + WAF", es: "ej. Web y Móvil vía ELB + WAF", zh: "例如 通过 ELB + WAF 访问" , pg: "e.g. Web and Mobile via ELB + WAF" },
   },
   core_components: {
-    question: { en: "What main services does the system need?", es: "¿Qué servicios principales necesita el sistema?", zh: "系统需要哪些主要服务？" },
-    helper: { en: "Think about compute, database, storage, load balancing — we'll map them to Huawei Cloud services", es: "Piense en compute, base de datos, almacenamiento, balanceo — los mapearemos a servicios Huawei Cloud", zh: "考虑计算、数据库、存储、负载均衡 — 我们会映射到华为云服务" },
-    placeholder: { en: "e.g. ECS, RDS MySQL, OBS, ELB", es: "ej. ECS, RDS MySQL, OBS, ELB", zh: "例如 ECS, RDS MySQL, OBS, ELB" },
+    question: { en: "What main services does the system need?", es: "¿Qué servicios principales necesita el sistema?", zh: "系统需要哪些主要服务？" , pg: "What main services does the system need?" },
+    helper: { en: "Think about compute, database, storage, load balancing — we'll map them to Huawei Cloud services", es: "Piense en compute, base de datos, almacenamiento, balanceo — los mapearemos a servicios Huawei Cloud", zh: "考虑计算、数据库、存储、负载均衡 — 我们会映射到华为云服务" , pg: "Think about compute, database, storage, load balancing — we'll map them to Huawei Cloud services" },
+    placeholder: { en: "e.g. ECS, RDS MySQL, OBS, ELB", es: "ej. ECS, RDS MySQL, OBS, ELB", zh: "例如 ECS, RDS MySQL, OBS, ELB" , pg: "e.g. ECS, RDS MySQL, OBS, ELB" },
   },
   external_integrations: {
-    question: { en: "Does the system connect to anything outside?", es: "¿El sistema se conecta con algo externo?", zh: "系统是否连接外部？" },
-    helper: { en: "Third-party APIs, on-prem systems, SaaS tools — or 'none' if standalone", es: "APIs de terceros, sistemas on-prem, herramientas SaaS — o 'ninguno' si es independiente", zh: "第三方API、本地系统、SaaS工具 — 独立则填「无」" },
-    placeholder: { en: "e.g. SAP ERP, Office 365", es: "ej. SAP ERP, Office 365", zh: "例如 SAP ERP, Office 365" },
+    question: { en: "Does the system connect to anything outside?", es: "¿El sistema se conecta con algo externo?", zh: "系统是否连接外部？" , pg: "Does the system connect to anything outside?" },
+    helper: { en: "Third-party APIs, on-prem systems, SaaS tools — or 'none' if standalone", es: "APIs de terceros, sistemas on-prem, herramientas SaaS — o 'ninguno' si es independiente", zh: "第三方API、本地系统、SaaS工具 — 独立则填「无」" , pg: "Third-party APIs, on-prem systems, SaaS tools — or 'none' if standalone" },
+    placeholder: { en: "e.g. SAP ERP, Office 365", es: "ej. SAP ERP, Office 365", zh: "例如 SAP ERP, Office 365" , pg: "e.g. SAP ERP, Office 365" },
   },
   data_stores_flow: {
-    question: { en: "How does data flow through the system?", es: "¿Cómo fluyen los datos en el sistema?", zh: "数据如何在系统中流动？" },
-    helper: { en: "Where is data stored? Does it move between services? Any analytics or backup?", es: "¿Dónde se almacenan los datos? ¿Se mueve entre servicios? ¿Hay análisis o respaldo?", zh: "数据存储在哪里？是否在服务间流动？有分析或备份？" },
-    placeholder: { en: "e.g. App → RDS MySQL; files → OBS; analytics → DLI", es: "ej. App → RDS MySQL; archivos → OBS; análisis → DLI", zh: "例如 应用 → RDS MySQL；文件 → OBS；分析 → DLI" },
+    question: { en: "How does data flow through the system?", es: "¿Cómo fluyen los datos en el sistema?", zh: "数据如何在系统中流动？" , pg: "How does data flow through the system?" },
+    helper: { en: "Where is data stored? Does it move between services? Any analytics or backup?", es: "¿Dónde se almacenan los datos? ¿Se mueve entre servicios? ¿Hay análisis o respaldo?", zh: "数据存储在哪里？是否在服务间流动？有分析或备份？" , pg: "Where is data stored? Does it move between services? Any analytics or backup?" },
+    placeholder: { en: "e.g. App → RDS MySQL; files → OBS; analytics → DLI", es: "ej. App → RDS MySQL; archivos → OBS; análisis → DLI", zh: "例如 应用 → RDS MySQL；文件 → OBS；分析 → DLI" , pg: "e.g. App → RDS MySQL; files → OBS; analytics → DLI" },
   },
   network_security_boundary: {
-    question: { en: "How is the network and security set up?", es: "¿Cómo se configura la red y seguridad?", zh: "网络和安全如何配置？" },
-    helper: { en: "VPC, subnets, firewalls, VPN — or just accept the recommendation for a standard setup", es: "VPC, subredes, firewalls, VPN — o acepte la recomendación para una configuración estándar", zh: "VPC、子网、防火墙、VPN — 或接受标准配置推荐" },
-    placeholder: { en: "e.g. VPC + WAF + NAT + VPN", es: "ej. VPC + WAF + NAT + VPN", zh: "例如 VPC + WAF + NAT + VPN" },
+    question: { en: "How is the network and security set up?", es: "¿Cómo se configura la red y seguridad?", zh: "网络和安全如何配置？" , pg: "How is the network and security set up?" },
+    helper: { en: "VPC, subnets, firewalls, VPN — or just accept the recommendation for a standard setup", es: "VPC, subredes, firewalls, VPN — o acepte la recomendación para una configuración estándar", zh: "VPC、子网、防火墙、VPN — 或接受标准配置推荐" , pg: "VPC, subnets, firewalls, VPN — or just accept the recommendation for a standard setup" },
+    placeholder: { en: "e.g. VPC + WAF + NAT + VPN", es: "ej. VPC + WAF + NAT + VPN", zh: "例如 VPC + WAF + NAT + VPN" , pg: "e.g. VPC + WAF + NAT + VPN" },
   },
   preferred_filename: {
-    question: { en: "What should the output file be named?", es: "¿Cómo nombrar el archivo de salida?", zh: "输出文件名是什么？" },
-    helper: { en: "Optional — we'll use the project name if you leave this blank", es: "Opcional — usaremos el nombre del proyecto si lo deja en blanco", zh: "可选 — 留空则使用项目名称" },
-    placeholder: { en: "e.g. my-project-hld", es: "ej. mi-proyecto-hld", zh: "例如 my-project-hld" },
+    question: { en: "What should the output file be named?", es: "¿Cómo nombrar el archivo de salida?", zh: "输出文件名是什么？" , pg: "What should the output file be named?" },
+    helper: { en: "Optional — we'll use the project name if you leave this blank", es: "Opcional — usaremos el nombre del proyecto si lo deja en blanco", zh: "可选 — 留空则使用项目名称" , pg: "Optional — we'll use the project name if you leave this blank" },
+    placeholder: { en: "e.g. my-project-hld", es: "ej. mi-proyecto-hld", zh: "例如 my-project-hld" , pg: "e.g. my-project-hld" },
   },
   summary: {
-    question: { en: "", es: "", zh: "" },
-    helper: { en: "", es: "", zh: "" },
-    placeholder: { en: "", es: "", zh: "" },
+    question: { en: "", es: "", zh: "" , pg: "" },
+    helper: { en: "", es: "", zh: "" , pg: "" },
+    placeholder: { en: "", es: "", zh: "" , pg: "" },
   },
 };
 
@@ -105,26 +104,33 @@ const summaryCopy: Record<Lang, { title: string; confirm: string; back: string; 
   en: { title: "Review your requirements", confirm: "Generate HLD", back: "Back", optional: "(optional)", fromRec: "recommended" },
   es: { title: "Revise sus requerimientos", confirm: "Generar HLD", back: "Volver", optional: "(opcional)", fromRec: "recomendado" },
   zh: { title: "确认需求", confirm: "生成 HLD", back: "返回", optional: "（可选）", fromRec: "推荐" },
+  pg: { title: "Review your requirements", confirm: "Generate HLD", back: "Back", optional: "(optional)", fromRec: "recommended" },
 };
 
 const fieldLabels: Record<Lang, Record<WizardField, string>> = {
   en: {
     project_name: "Project Name", business_goal: "Business Goal", architecture_boundary: "Scope",
-    deployment_mode: "Deployment", user_access_entry: "User Access", core_components: "Core Services",
+    deployment_mode: "", user_access_entry: "User Access", core_components: "Core Services",
     external_integrations: "External Connections", data_stores_flow: "Data Flow",
     network_security_boundary: "Network & Security", preferred_filename: "Filename",
   },
   es: {
     project_name: "Nombre del Proyecto", business_goal: "Objetivo", architecture_boundary: "Alcance",
-    deployment_mode: "Despliegue", user_access_entry: "Acceso", core_components: "Servicios Principales",
+    deployment_mode: "", user_access_entry: "Acceso", core_components: "Servicios Principales",
     external_integrations: "Conexiones Externas", data_stores_flow: "Flujo de Datos",
     network_security_boundary: "Red y Seguridad", preferred_filename: "Archivo",
   },
   zh: {
     project_name: "项目名称", business_goal: "业务目标", architecture_boundary: "范围",
-    deployment_mode: "部署", user_access_entry: "用户访问", core_components: "核心服务",
+    deployment_mode: "", user_access_entry: "用户访问", core_components: "核心服务",
     external_integrations: "外部连接", data_stores_flow: "数据流",
     network_security_boundary: "网络与安全", preferred_filename: "文件名",
+  },
+  pg: {
+    project_name: "Project Name", business_goal: "Business Goal", architecture_boundary: "Scope",
+    deployment_mode: "", user_access_entry: "User Access", core_components: "Core Services",
+    external_integrations: "External Connections", data_stores_flow: "Data Flow",
+    network_security_boundary: "Network & Security", preferred_filename: "Filename",
   },
 };
 
@@ -144,7 +150,7 @@ interface HldDesignWizardProps {
 }
 
 function isLongTextField(field: WizardField): boolean {
-  return !["project_name", "deployment_mode", "preferred_filename"].includes(field);
+  return !["project_name", "preferred_filename"].includes(field);
 }
 
 export function HldDesignWizard({ lang, onSubmit, onCancel, initialRequirements, initialStep }: HldDesignWizardProps) {
@@ -186,6 +192,7 @@ export function HldDesignWizard({ lang, onSubmit, onCancel, initialRequirements,
     en: ["SMB Customer Service Portal", "AI Knowledge Assistant for Internal Teams", "Cloud Migration for ERP Workloads"],
     es: ["Portal de Atención al Cliente SMB", "Asistente de Conocimiento AI para Equipos", "Migración Cloud para Cargas ERP"],
     zh: ["SMB 客户服务门户", "AI 知识助手", "ERP 工作负载云迁移"],
+    pg: ["SMB Customer Service Portal", "AI Knowledge Assistant for Internal Teams", "Cloud Migration for ERP Workloads"],
   };
 
   // Fetch recommendation when step changes or when accumulated answers change.
@@ -278,7 +285,7 @@ export function HldDesignWizard({ lang, onSubmit, onCancel, initialRequirements,
         project_name: answers.project_name || "",
         business_goal: answers.business_goal || "",
         architecture_boundary: answers.architecture_boundary || "",
-        deployment_mode: (answers.deployment_mode as "on-prem" | "cloud" | "hybrid") || "cloud",
+        deployment_mode: "cloud",
         user_access_entry: answers.user_access_entry || "",
         core_components: answers.core_components || "",
         external_integrations: answers.external_integrations || "",
@@ -359,10 +366,10 @@ export function HldDesignWizard({ lang, onSubmit, onCancel, initialRequirements,
 
   // Source label for debug display
   const sourceLabel: Record<RecSource, Record<Lang, string>> = {
-    static: { en: "static", es: "estático", zh: "静态" },
-    rule: { en: "rule", es: "regla", zh: "规则" },
-    llm: { en: "AI", es: "IA", zh: "AI" },
-    fallback_default: { en: "default", es: "predeterminado", zh: "默认" },
+    static: { en: "static", es: "estático", zh: "静态" , pg: "static" },
+    rule: { en: "rule", es: "regla", zh: "规则" , pg: "rule" },
+    llm: { en: "AI", es: "IA", zh: "AI" , pg: "AI" },
+    fallback_default: { en: "default", es: "predeterminado", zh: "默认" , pg: "default" },
   };
 
   return (
@@ -457,18 +464,7 @@ export function HldDesignWizard({ lang, onSubmit, onCancel, initialRequirements,
                     {fromRec ? <span className="hld-wizard-rec-badge">{summaryCopy[lang].fromRec}</span> : null}
                   </label>
                   <div className="hld-wizard-summary-control">
-                    {field === "deployment_mode" ? (
-                      <select
-                        id={fieldId}
-                        className="hld-wizard-summary-input"
-                        value={value || "cloud"}
-                        onChange={(e) => setAnswers((prev) => ({ ...prev, [field]: e.target.value }))}
-                      >
-                        <option value="cloud">cloud</option>
-                        <option value="hybrid">hybrid</option>
-                        <option value="on-prem">on-prem</option>
-                      </select>
-                    ) : isLongTextField(field) ? (
+                    {isLongTextField(field) ? (
                       <textarea
                         id={fieldId}
                         className="hld-wizard-summary-input hld-wizard-summary-textarea"

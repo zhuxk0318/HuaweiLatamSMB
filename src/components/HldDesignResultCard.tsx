@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Download, FileCode, Plus, Pencil, LoaderCircle } from "lucide-react";
 
-type Lang = "es" | "en" | "zh";
+type Lang = "es" | "en" | "zh" | "pg";
 
 const copy: Record<Lang, {
   preview: string;
@@ -38,6 +38,15 @@ const copy: Record<Lang, {
     modifyRequirements: "修改需求",
     file: "文件",
     generated: "生成时间",
+  },
+  pg: {
+    preview: "Architecture Diagram Preview",
+    downloadPng: "Download PNG",
+    downloadDrawio: "Download .drawio",
+    createAnother: "Create another HLD",
+    modifyRequirements: "Modify requirements",
+    file: "File",
+    generated: "Generated",
   },
 };
 

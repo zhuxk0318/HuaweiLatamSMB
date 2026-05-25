@@ -22,6 +22,11 @@ const uiCopy = {
     rvtools: "RVTools 报价",
     flexible: "Flexible 报价",
   },
+  pg: {
+    title: "Quote mode",
+    rvtools: "RVTools Quote",
+    flexible: "Flexible Quote",
+  },
 } satisfies Record<Lang, Record<string, string>>;
 
 export function QuoteEstimatorHub({ lang }: { lang: Lang }) {

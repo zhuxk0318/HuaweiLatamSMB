@@ -16,7 +16,7 @@ export type SolutionGuide = {
   technicalReferences?: Array<{ label: string; href: string }>;
 };
 
-const t = (es: string, en: string, zh?: string): Localized => ({ es, en, zh: zh ?? en });
+const t = (es: string, en: string, zh?: string): Localized => ({ es, en, zh: zh ?? en, pg: en });
 
 const standardPath: SolutionGuide["adoptionPath"] = [
   {

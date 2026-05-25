@@ -48,6 +48,16 @@ const labels = {
     openOfficial: "打开官方方案",
     externalBadge: "外部链接",
   },
+  pg: {
+    kicker: "Migration & Modernization",
+    title: "Migration and modernization scenarios",
+    body: "Practical paths for moving workloads, databases, VMware, and ERP from other clouds or datacenters into Huawei Cloud.",
+    viewSolution: "View solution",
+    viewSkill: "View demo / skill",
+    quickIntegration: "Quick integration",
+    openOfficial: "Open official solution",
+    externalBadge: "External link",
+  },
 } satisfies Record<
   Lang,
   {

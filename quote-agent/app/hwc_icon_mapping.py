@@ -133,6 +133,9 @@ _SYNONYMS: dict[str, str] = {
     # VPN
     "virtual private network": "vpn",
     "virtual private network (vpn)": "vpn",
+    "vpn gateway": "vpn",
+    "site to site vpn": "vpn",
+    "site-to-site vpn": "vpn",
     # WAF
     "web application firewall": "waf",
     "web application firewall (waf)": "waf",

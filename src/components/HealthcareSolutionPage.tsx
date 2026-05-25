@@ -48,6 +48,19 @@ const labels = {
     metricImprovement: "提升项",
     metricValue: "结果",
   },
+  pg: {
+    back: "Voltar ao playbook",
+    overview: "Visão geral da solução",
+    keyValue: "Valor principal e melhorias mensuráveis",
+    modules: "Módulos da solução e fluxos clínicos",
+    architecture: "Arquitetura e infraestrutura",
+    products: "Base de produtos Huawei",
+    outcomes: "Resultados para o cliente",
+    cta: "Solicitar consulta de solução",
+    browseAll: "Ver todas as soluções",
+    metricImprovement: "Melhoria",
+    metricValue: "Valor",
+  },
 } satisfies Record<Lang, Record<string, string>>;
 
 interface HealthcareContent {

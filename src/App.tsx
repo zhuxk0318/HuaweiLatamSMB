@@ -18,7 +18,7 @@ type Route = "home" | "estimator" | "solutionsIndex" | "solution" | "migration" 
 
 function getInitialLang(): Lang {
   const stored = window.localStorage.getItem("huawei-latam-smb-lang");
-  return stored === "en" || stored === "zh" ? stored : "es";
+  return stored === "en" || stored === "zh" || stored === "pg" ? stored : "es";
 }
 
 function getRoute(): Route {
@@ -92,6 +92,13 @@ const estimatorCta = {
     body:
       "将报价器作为独立工具使用，在云迁移前查看区域、本地缓存价格和月度估算结果。",
     action: "打开报价器",
+  },
+  pg: {
+    kicker: "Cotação Cloud",
+    title: "Estime ECS e EVS desde RVTools",
+    body:
+      "Use o cotação como ferramenta separada para revisar regiões, preços em cache e estimativas mensais antes de uma migração cloud.",
+    action: "Abrir cotação",
   },
 } satisfies Record<Lang, { kicker: string; title: string; body: string; action: string }>;
 
@@ -285,6 +292,20 @@ function SiteHeader({
         </a>
       </nav>
       <div className="language-toggle" aria-label="Language">
+        {/* <button
+          type="button"
+          className={lang === "pg" ? "active" : ""}
+          onClick={() => {
+            trackClick({
+              click_target: "language_pg",
+              click_section: "header",
+              destination: "pg",
+            });
+            setLang("pg");
+          }}
+        >
+          PG
+        </button> */}
         <button
           type="button"
           className={lang === "es" ? "active" : ""}
