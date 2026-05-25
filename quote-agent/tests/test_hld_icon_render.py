@@ -113,17 +113,23 @@ class TestHwcIconMapping:
         ("Direct Connect", "Direct Connect"),
         ("dedicated line", "Direct Connect"),
         ("private line", "Direct Connect"),
+        # DataArts / CDM
+        ("DataArts", "DataArts Studio"),
+        ("DataArts Studio", "DataArts Studio"),
+        ("CDM", "Cloud Data Migration (CDM)"),
+        ("Cloud Data Migration", "Cloud Data Migration (CDM)"),
         # DRS
         ("database replication service", "Data Replication Service (DRS)"),
         ("drs", "Data Replication Service (DRS)"),
         # CBR / Backup
         ("backup", "Cloud Backup and Recovery (CBR)"),
         ("backup copy", "Cloud Backup and Recovery (CBR)"),
-        # SDRS
-        ("disaster recovery", "Storage Disaster Recovery Service (SDRS)"),
     ])
     def test_new_synonyms(self, product, expected_title):
         assert resolve_product_icon_title(product) == expected_title
+
+    def test_disaster_recovery_does_not_map_to_backup_icon(self):
+        assert resolve_product_icon_title("disaster recovery") is None
 
     @pytest.mark.parametrize("product,expected_title", [
         # Role suffix stripping

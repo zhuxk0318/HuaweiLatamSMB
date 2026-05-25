@@ -85,12 +85,15 @@ PRODUCT_TO_ICON_TITLE: dict[str, str] = {
     "mgc": "Migration Center (MgC)",
     "ugo": "Database and Application Migration (UGO)",
     "oms": "Object Migration Service (OMS)",
+    "cdm": "Cloud Data Migration (CDM)",
     # Big Data / AI
     "mrs": "MapReduce Service (MRS)",
     "dli": "Data Lake Insight (DLI)",
     "modelarts": "ModelArts",
     "dis": "Data Ingestion Service (DIS)",
     "css": "Cloud Search Service (CSS)",
+    "dataarts": "DataArts Studio",
+    "dataarts_studio": "DataArts Studio",
     # Other
     "region": "Region",
     "az": "Availability Zone (AZ)",
@@ -185,6 +188,10 @@ _SYNONYMS: dict[str, str] = {
     # DLI
     "data lake insight": "dli",
     "data lake insight (dli)": "dli",
+    # DataArts
+    "dataarts": "dataarts",
+    "data arts": "dataarts",
+    "dataarts studio": "dataarts",
     # CFW
     "cloud firewall": "cfw",
     "cloud firewall (cfw)": "cfw",
@@ -234,13 +241,14 @@ _SYNONYMS: dict[str, str] = {
     "database replication service": "drs",
     "data replication service (drs)": "drs",
     "drs": "drs",
+    # CDM
+    "cdm": "cdm",
+    "cloud data migration": "cdm",
+    "cloud data migration (cdm)": "cdm",
     # CBR / Backup
     "backup": "cbr",
     "backup copy": "cbr",
     "cloud backup": "cbr",
-    "disaster recovery": "cbr",
-    "storage disaster recovery service": "cbr",
-    "storage disaster recovery service (sdrs)": "cbr",
     # Kafka / RabbitMQ
     "dms for rocketmq": "dms_rocketmq",
     "rocketmq": "dms_rocketmq",
