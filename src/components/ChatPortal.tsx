@@ -3,6 +3,7 @@ import type { ChangeEvent, KeyboardEvent } from "react";
 import {
   ArrowUp,
   Calculator,
+  FileText,
   FileUp,
   Layers3,
   LayoutDashboard,
@@ -17,6 +18,10 @@ import type { Lang } from "../data/i18n";
 import { HldDesignWizard } from "./HldDesignWizard";
 import type { HldRequirements } from "./HldDesignWizard";
 import { HldDesignResultCard } from "./HldDesignResultCard";
+import { ProposalWizard } from "./ProposalWizard";
+import type { ProposalRequest } from "./ProposalWizard";
+import { ProposalResultCard } from "./ProposalResultCard";
+import type { ProposalTaskResult } from "./ProposalResultCard";
 
 const API_BASE_URL = (import.meta.env.VITE_QUOTE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "/quote-api";
 
@@ -226,14 +231,22 @@ const capabilityEntries = [
     href: "#/hld",
     icon: LayoutDashboard,
   },
+  {
+    key: "proposal",
+    label: "Proposal",
+    description: { en: "Generate a full technical proposal with PPTX", es: "Genere una propuesta técnica completa con PPTX", zh: "生成包含 PPTX 的完整技术提案", pg: "Gere uma proposta técnica completa com PPTX" },
+    href: "#/proposal",
+    icon: FileText,
+  },
 ] as const;
 
 const headerNavItems = [
-  { label: "Pricing", href: "#/estimator" },
-  { label: "Solution", href: "#/solutions" },
-  { label: "Migration", href: "#/migration" },
-  { label: "HLD Design", href: "#/hld" },
-];
+  { label: "Home", href: "#/", route: "home" },
+  { label: "Solutions", href: "#/solutions", route: "solutions" },
+  { label: "Migration", href: "#/migration", route: "migration" },
+  { label: "Pricing", href: "#/estimator", route: "pricing" },
+  { label: "HLD Design", href: "#/hld", route: "hld" },
+] as const;
 
 function createLocalMessageId(prefix: string) {
   if (typeof globalThis.crypto?.randomUUID === "function") {
@@ -244,6 +257,13 @@ function createLocalMessageId(prefix: string) {
 
 export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang) => void }) {
   const t = copy[lang];
+  const currentHash = typeof window !== "undefined" ? window.location.hash : "";
+  const currentRoute =
+    currentHash.startsWith("#/solutions") ? "solutions" :
+    currentHash.startsWith("#/migration") ? "migration" :
+    currentHash.startsWith("#/estimator") ? "pricing" :
+    currentHash.startsWith("#/hld") ? "hld" :
+    "home";
   const [sessionId, setSessionId] = useState("");
   const [messages, setMessages] = useState<PortalMessage[]>([]);
   const [composer, setComposer] = useState("");
@@ -271,6 +291,23 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
   const [hldReturnToReview, setHldReturnToReview] = useState(false);
   const hldPollTokenRef = useRef(0);
 
+  // Proposal mode state
+  const [proposalMode, setProposalMode] = useState(false);
+  const [proposalTaskId, setProposalTaskId] = useState("");
+  const [proposalPolling, setProposalPolling] = useState(false);
+  const [proposalError, setProposalError] = useState("");
+  const [proposalResult, setProposalResult] = useState<ProposalTaskResult | null>(null);
+  const [proposalLastRequest, setProposalLastRequest] = useState<ProposalRequest | null>(null);
+  const [proposalReturnToReview, setProposalReturnToReview] = useState(false);
+  const proposalPollTokenRef = useRef(0);
+
+  const proposalCopy: Record<Lang, { generating: string; back: string; retry: string; editAnswers: string }> = {
+    en: { generating: "Generating proposal…", back: "Back", retry: "Retry", editAnswers: "Edit inputs" },
+    es: { generating: "Generando propuesta…", back: "Volver", retry: "Reintentar", editAnswers: "Editar entradas" },
+    zh: { generating: "正在生成提案…", back: "返回", retry: "重试", editAnswers: "修改输入" },
+    pg: { generating: "Gerando proposta…", back: "Voltar", retry: "Tentar novamente", editAnswers: "Editar entradas" },
+  };
+
   useEffect(() => {
     void startNewConversation();
   }, []);
@@ -287,6 +324,9 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
   useEffect(() => {
     if (window.location.hash === "#/hld") {
       setHldMode(true);
+    }
+    if (window.location.hash === "#/proposal") {
+      setProposalMode(true);
     }
   }, []);
 
@@ -391,6 +431,90 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
     setHldGeneratedAt("");
     setHldReturnToReview(true);
     // hldLastRequirements is intentionally kept
+  }
+
+  // Proposal submit handler
+  async function handleProposalSubmit(request: ProposalRequest) {
+    setProposalLastRequest(request);
+    setProposalReturnToReview(false);
+    setProposalPolling(true);
+    setProposalError("");
+    setProposalResult(null);
+    const token = ++proposalPollTokenRef.current;
+    try {
+      const resp = await fetch(`${API_BASE_URL}/api/proposals/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      if (!resp.ok) throw new Error("Failed to create proposal task");
+      const payload = (await resp.json()) as { task_id: string; status: string };
+      setProposalTaskId(payload.task_id);
+      pollProposalTask(payload.task_id, token);
+    } catch (err) {
+      setProposalError(err instanceof Error ? err.message : "Proposal submission failed");
+      setProposalPolling(false);
+    }
+  }
+
+  function pollProposalTask(taskId: string, token: number) {
+    if (token !== proposalPollTokenRef.current) return;
+    fetch(`${API_BASE_URL}/api/proposals/tasks/${taskId}`)
+      .then((resp) => {
+        if (!resp.ok) throw new Error("Poll failed");
+        return resp.json();
+      })
+      .then((data: ProposalTaskResult) => {
+        if (token !== proposalPollTokenRef.current) return;
+        if (data.status === "queued" || data.status === "running") {
+          setTimeout(() => pollProposalTask(taskId, token), 1500);
+          return;
+        }
+        if (data.status === "failed") {
+          const stage = data.error?.last_stage || "";
+          const detail = data.error?.message || "Proposal generation failed.";
+          setProposalError(stage ? `${detail} (stage: ${stage})` : detail);
+          setProposalPolling(false);
+          return;
+        }
+        setProposalResult(data);
+        setProposalPolling(false);
+      })
+      .catch(() => {
+        if (token !== proposalPollTokenRef.current) return;
+        setProposalError("Polling failed");
+        setProposalPolling(false);
+      });
+  }
+
+  function resetProposalMode() {
+    ++proposalPollTokenRef.current;
+    setProposalMode(false);
+    setProposalTaskId("");
+    setProposalPolling(false);
+    setProposalError("");
+    setProposalResult(null);
+    setProposalLastRequest(null);
+    window.location.hash = "#/";
+  }
+
+  function startAnotherProposal() {
+    ++proposalPollTokenRef.current;
+    setProposalTaskId("");
+    setProposalPolling(false);
+    setProposalError("");
+    setProposalResult(null);
+    setProposalLastRequest(null);
+    setProposalReturnToReview(false);
+  }
+
+  function handleProposalModifyAnswers() {
+    ++proposalPollTokenRef.current;
+    setProposalTaskId("");
+    setProposalPolling(false);
+    setProposalError("");
+    setProposalResult(null);
+    setProposalReturnToReview(true);
   }
 
   function handleTranscriptScroll() {
@@ -602,31 +726,41 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
     }
   }
 
-  const welcomeVisible = useMemo(() => !hldMode && messages.length === 0, [hldMode, messages.length]);
+  const welcomeVisible = useMemo(() => !hldMode && !proposalMode && messages.length === 0, [hldMode, proposalMode, messages.length]);
 
   return (
     <main className="chat-portal-page">
-      <header className="chat-portal-header">
-        <div className="chat-portal-brand">
+      <header className="site-header chat-portal-site-header">
+        <a
+          className="brand"
+          href="#/"
+          aria-label="Huawei LATAM SMB Solutions"
+          onClick={() =>
+            trackClick({
+              click_target: "nav_logo",
+              click_section: "header",
+              destination: "#/",
+            })
+          }
+        >
           <img src="/assets/huawei/huawei-logo.png" alt="Huawei" />
-          <span>{t.productName}</span>
-        </div>
-        {!welcomeVisible && (
-          <nav className="chat-portal-nav" aria-label="Quick access">
-            {headerNavItems.map((item) => (
-              <a
-                key={item.label}
-                href={item.href}
-                onClick={() =>
-                  trackClick({ click_target: `chat_nav_${item.label.toLowerCase()}`, click_section: "chat_header", destination: item.href })
-                }
-              >
-                {item.label}
-              </a>
-            ))}
-          </nav>
-        )}
-        <div className="chat-portal-actions">
+          <span>LATAM SMB Solutions</span>
+        </a>
+        <nav className="main-nav" aria-label="Primary">
+          {headerNavItems.map((item) => (
+            <a
+              key={item.label}
+              className={currentRoute === item.route ? "nav-active" : ""}
+              href={item.href}
+              onClick={() =>
+                trackClick({ click_target: `chat_nav_${item.route}`, click_section: "chat_header", destination: item.href })
+              }
+            >
+              {item.label}
+            </a>
+          ))}
+        </nav>
+        <div className="chat-portal-actions chat-portal-site-actions">
           <div className="language-toggle chat-language-toggle" aria-label="Language">
             {/* <button type="button" className={lang === "pg" ? "active" : ""} onClick={() => setLang("pg")}>
               PG
@@ -677,6 +811,12 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
                           event.preventDefault();
                           setHldMode(true);
                           trackClick({ click_target: "chat_entry_hld", click_section: "chat_capability_entries", destination: "hld_wizard" });
+                          return;
+                        }
+                        if (entry.key === "proposal") {
+                          event.preventDefault();
+                          setProposalMode(true);
+                          trackClick({ click_target: "chat_entry_proposal", click_section: "chat_capability_entries", destination: "proposal_wizard" });
                           return;
                         }
                         trackClick({ click_target: `chat_entry_${entry.key}`, click_section: "chat_capability_entries", destination: entry.href });
@@ -734,6 +874,50 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
                 />
               )}
             </div>
+          ) : proposalMode ? (
+            <div className="chat-message-list">
+              {proposalResult ? (
+                <ProposalResultCard
+                  taskId={proposalTaskId}
+                  result={proposalResult}
+                  lang={lang}
+                  onCreateAnother={startAnotherProposal}
+                  onModifyAnswers={handleProposalModifyAnswers}
+                  followUpActions={{
+                    hldMode: proposalLastRequest?.hld_mode,
+                    priceMode: proposalLastRequest?.price_mode,
+                  }}
+                />
+              ) : proposalPolling ? (
+                <div className="hld-generating">
+                  <LoaderCircle size={24} className="spin-icon" />
+                  <p>{proposalCopy[lang].generating}</p>
+                </div>
+              ) : proposalError ? (
+                <div className="hld-generating">
+                  <p className="form-error">{proposalError}</p>
+                  <div className="hld-error-actions">
+                    {proposalLastRequest ? (
+                      <button type="button" className="hld-result-another" onClick={() => handleProposalSubmit(proposalLastRequest)}>
+                        {proposalCopy[lang].retry}
+                      </button>
+                    ) : null}
+                    <button type="button" className="chat-secondary-button" onClick={handleProposalModifyAnswers}>
+                      {proposalCopy[lang].editAnswers}
+                    </button>
+                    <button type="button" className="chat-secondary-button" onClick={resetProposalMode}>
+                      {proposalCopy[lang].back}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <ProposalWizard
+                  lang={lang}
+                  onSubmit={handleProposalSubmit}
+                  onCancel={resetProposalMode}
+                />
+              )}
+            </div>
           ) : (
             <div className="chat-message-list">
               {messages.map((message) => (
@@ -786,7 +970,7 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
           )}
         </div>
 
-        <div className={welcomeVisible || hldMode ? "chat-composer-shell is-empty" : "chat-composer-shell"}>
+        <div className={welcomeVisible || hldMode || proposalMode ? "chat-composer-shell is-empty" : "chat-composer-shell"}>
           {uploads.length > 0 ? (
             <div className="chat-upload-list">
               <strong>{t.uploads}</strong>

@@ -34,6 +34,7 @@ from app.hld_layout import (
     CONTAINER_PADDING_X,
     CONTAINER_PADDING_Y,
     CONTAINER_TITLE_GAP,
+    SUBNET_LABEL_SPACE,
     GROUP_PADDING_X,
     GROUP_PADDING_Y,
     MIN_CONTAINER_W,
@@ -119,7 +120,7 @@ VALID_EDGE_KINDS = ("traffic", "management", "replication", "notification")
 CONTAINER_STYLE_MAP: dict[str, dict[str, str]] = {
     "region":     {"outline": "#3771c8", "fill": "none",      "fontStyle": "0", "dashed": "1",   "dashPattern": "8 4",   "startSize": "18", "strokeWidth": "1"},
     "vpc":        {"outline": "#f85835", "fill": "none",      "fontStyle": "0", "dashed": "0",   "dashPattern": "",      "startSize": "18", "strokeWidth": "1"},
-    "subnet":     {"outline": "#999999", "fill": "#f5f5f5",   "fontStyle": "0", "dashed": "1",   "dashPattern": "5 5",   "startSize": "16", "strokeWidth": "1"},
+    "subnet":     {"outline": "#999999", "fill": "#f5f5f5",   "fontStyle": "0", "dashed": "1",   "dashPattern": "5 5",   "startSize": "0", "strokeWidth": "1"},
     "az":         {"outline": "#3298ff", "fill": "none",      "fontStyle": "0", "dashed": "1",   "dashPattern": "5 5",   "startSize": "16", "strokeWidth": "1"},
     "as_group":   {"outline": "#3298ff", "fill": "none",      "fontStyle": "0", "dashed": "1",   "dashPattern": "5 5",   "startSize": "16", "strokeWidth": "1"},
     "as_policy":  {"outline": "#3298ff", "fill": "none",      "fontStyle": "0", "dashed": "1",   "dashPattern": "5 5",   "startSize": "16", "strokeWidth": "1"},
@@ -329,6 +330,13 @@ _OBS_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
+_BIG_DATA_KEYWORDS = re.compile(
+    r"big\s+data|analytics|data\s+lake|data\s+warehouse|etl|elt|"
+    r"dataarts|dws|dli|mrs|obs|cdm|lakehouse|"
+    r"大数据|数据湖|数据仓库|数据分析|数据编排",
+    re.IGNORECASE,
+)
+
 
 class SemanticFlags:
     """Lightweight flags detected from requirements text fields."""
@@ -448,6 +456,34 @@ def _normalize_spec(spec: dict, flags: SemanticFlags, requirements: HldRequireme
                     return c["id"]
         return None
 
+    def _find_frontend_subnet() -> str | None:
+        for c in containers:
+            if c["container_type"] == "subnet":
+                label = c.get("label", "").lower()
+                if any(token in label for token in ("front", "public", "ingress", "dmz", "web")):
+                    return c["id"]
+        return None
+
+    def _requirements_text() -> str:
+        req_fields = [
+            requirements.business_goal,
+            requirements.architecture_boundary,
+            requirements.core_components,
+            requirements.data_stores_flow,
+            requirements.network_security_boundary,
+            requirements.external_integrations,
+        ]
+        return " ".join(f for f in req_fields if f)
+
+    def _is_big_data_scenario() -> bool:
+        if _BIG_DATA_KEYWORDS.search(_requirements_text()):
+            return True
+        big_data_products = {
+            "obs", "cdm", "cloud data migration (cdm)", "dataarts", "dataarts studio",
+            "dws", "dli", "mrs",
+        }
+        return any((n.get("product") or "").lower() in big_data_products for n in nodes)
+
     # Helper: check if a product already exists among nodes
     def _has_product(product: str) -> bool:
         for n in nodes:
@@ -464,6 +500,88 @@ def _normalize_spec(spec: dict, flags: SemanticFlags, requirements: HldRequireme
         nid = f"{prefix}-{i}"
         node_ids.add(nid)
         return nid
+
+    def _ancestor_vpc_id(container_id: str | None) -> str | None:
+        current = container_id
+        while current and current in container_by_id:
+            container = container_by_id[current]
+            if container["container_type"] == "vpc":
+                return current
+            current = container.get("parent_id")
+        return None
+
+    def _normalize_big_data_layout() -> None:
+        if not _is_big_data_scenario():
+            return
+
+        data_subnet_id = _find_data_subnet()
+        if not data_subnet_id:
+            return
+
+        product_groups = {
+            "storage": {"obs", "cdm", "cloud data migration (cdm)"},
+            "analysis": {"dws", "dli", "mrs"},
+            "orchestration": {"dataarts", "dataarts studio"},
+            "compute": {"ecs", "cce", "cci"},
+        }
+        app_subnet_id = _find_app_subnet()
+
+        for node in nodes:
+            product = (node.get("product") or "").lower()
+            label = node.get("label", "").lower()
+            is_compute_node = (
+                product in product_groups["compute"]
+                or (node.get("type") == "service" and any(token in label for token in ("ecs", "cce", "cci")))
+            )
+            if product in product_groups["storage"] | product_groups["analysis"] | product_groups["orchestration"]:
+                node["container_id"] = data_subnet_id
+            elif (
+                app_subnet_id
+                and is_compute_node
+                and "data" in container_by_id.get(node.get("container_id", ""), {}).get("label", "").lower()
+            ):
+                node["container_id"] = app_subnet_id
+
+        def _has_edge(source: str, target: str) -> bool:
+            return any(e["source"] == source and e["target"] == target for e in edges)
+
+        storage_nodes = [n for n in nodes if (n.get("product") or "").lower() == "obs"]
+        cdm_nodes = [n for n in nodes if (n.get("product") or "").lower() in {"cdm", "cloud data migration (cdm)"}]
+        analysis_nodes = [n for n in nodes if (n.get("product") or "").lower() in product_groups["analysis"]]
+        orchestration_nodes = [n for n in nodes if (n.get("product") or "").lower() in product_groups["orchestration"]]
+        if cdm_nodes and storage_nodes and not _has_edge(cdm_nodes[0]["id"], storage_nodes[0]["id"]):
+            edges.append({"source": cdm_nodes[0]["id"], "target": storage_nodes[0]["id"], "label": "", "edge_kind": "traffic"})
+        if storage_nodes and analysis_nodes and not _has_edge(storage_nodes[0]["id"], analysis_nodes[0]["id"]):
+            edges.append({"source": storage_nodes[0]["id"], "target": analysis_nodes[0]["id"], "label": "", "edge_kind": "traffic"})
+        if analysis_nodes and orchestration_nodes and not _has_edge(analysis_nodes[0]["id"], orchestration_nodes[0]["id"]):
+            edges.append({"source": analysis_nodes[0]["id"], "target": orchestration_nodes[0]["id"], "label": "", "edge_kind": "traffic"})
+
+    def _normalize_ingress_node_placement() -> None:
+        frontend_subnet_id = _find_frontend_subnet()
+        if not frontend_subnet_id:
+            return
+        root_region_id = next(
+            (c["id"] for c in containers if c["container_type"] == "region" and c.get("parent_id") is None),
+            None,
+        )
+
+        ingress_products = {"cdn", "elb", "waf", "nat gateway", "nat", "apig", "vpn", "direct connect", "dc"}
+        ingress_labels = ("cdn", "elb", "waf", "nat", "api gateway", "apig", "vpn", "direct connect")
+
+        for node in nodes:
+            product = (node.get("product") or "").lower()
+            label = node.get("label", "").lower()
+            if product not in ingress_products and not any(token in label for token in ingress_labels):
+                continue
+
+            cid = node.get("container_id")
+            if cid is None or cid == root_region_id:
+                node["container_id"] = frontend_subnet_id
+                continue
+
+            container = container_by_id.get(cid)
+            if container and container["container_type"] in {"region", "vpc"}:
+                node["container_id"] = frontend_subnet_id
 
     def _collapse_az_to_single_az() -> None:
         """Flatten accidental AZ containers back to region -> vpc -> subnet -> node."""
@@ -531,6 +649,8 @@ def _normalize_spec(spec: dict, flags: SemanticFlags, requirements: HldRequireme
 
     if not flags.any_set():
         _collapse_az_to_single_az()
+        _normalize_big_data_layout()
+        _normalize_ingress_node_placement()
         # Still run OBS/SDRS cleanup even without semantic flags
         _normalize_obs_sdrs_cleanup(spec, nodes, edges, node_by_id, requirements)
         return
@@ -589,9 +709,16 @@ def _normalize_spec(spec: dict, flags: SemanticFlags, requirements: HldRequireme
             node_by_id[onprem_id] = onprem_node
             external_nodes = [onprem_node]
 
+        # External data ingestion into CDM should stay direct, without auto-added VPN/DC.
+        has_cdm_ingest = bool(external_nodes) and any(
+            (n.get("product") or "").lower() in {"cdm", "cloud data migration (cdm)"}
+            for n in nodes
+        )
+        if has_cdm_ingest:
+            pass
         # Check for VPN or Direct Connect node
         has_vpn_or_dc = _has_product("VPN") or _has_product("Direct Connect") or _has_product("DC")
-        if not has_vpn_or_dc:
+        if not has_cdm_ingest and not has_vpn_or_dc:
             # Inject a VPN gateway in the frontend subnet
             fe_subnet = None
             for c in containers:
@@ -634,6 +761,9 @@ def _normalize_spec(spec: dict, flags: SemanticFlags, requirements: HldRequireme
                         n["product"] = "CCE"
                         n["label"] = "CCE"
                         break
+
+    _normalize_big_data_layout()
+    _normalize_ingress_node_placement()
 
     # ── OBS gating + SDRS/CSBS removal (always runs) ──
     _normalize_obs_sdrs_cleanup(spec, nodes, edges, node_by_id, requirements)
@@ -1177,6 +1307,8 @@ def parse_architecture_spec(llm_output: str) -> dict:
             if node.get("type") not in VALID_NODE_TYPES:
                 raise ValueError(f"Invalid node type: {node.get('type')}")
             cid = node.get("container_id")
+            product = (node.get("product") or "").lower()
+            label_lower = node.get("label", "").lower()
             if len(node.get("label", "")) > MAX_LABEL_LEN:
                 raise ValueError(f"Node {node['id']} label too long ({len(node.get('label', ''))} > {MAX_LABEL_LEN})")
 
@@ -1230,6 +1362,27 @@ def parse_architecture_spec(llm_output: str) -> dict:
             # Warn if non-external node lacks product field (needed for icon rendering)
             if not node.get("product"):
                 logger.warning("Node %s (type=%s) missing 'product' field — will use generic shape fallback", node["id"], node["type"])
+
+            ingress_products = {"cdn", "elb", "waf", "nat gateway", "nat", "apig", "vpn", "direct connect", "dc"}
+            ingress_labels = ("cdn", "elb", "waf", "nat", "api gateway", "apig", "vpn", "direct connect")
+            is_ingress_node = (
+                node["type"] == "gateway"
+                or product in ingress_products
+                or any(token in label_lower for token in ingress_labels)
+            )
+            if is_ingress_node:
+                cur = container_by_id.get(cid)
+                subnet_ancestor = None
+                while cur:
+                    if cur["container_type"] == "subnet":
+                        subnet_ancestor = cur
+                        break
+                    pid = cur.get("parent_id")
+                    cur = container_by_id.get(pid) if pid else None
+                if not subnet_ancestor:
+                    raise ValueError(
+                        f"Ingress/gateway node {node['id']} must be inside a frontend/public subnet, not directly under region/vpc."
+                    )
 
         # edges: validate source/target, edge_kind, count
         node_id_set = set(node_ids)
@@ -1436,8 +1589,8 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
         src_box: tuple[int, int, int, int],
         tgt_box: tuple[int, int, int, int],
     ) -> list[tuple[int, int]]:
-        src_anchor = (src_box[0], src_box[1] + src_box[3] // 2)
-        tgt_anchor = (tgt_box[0] + tgt_box[2], tgt_box[1] + tgt_box[3] // 2)
+        src_anchor = (src_box[0] + src_box[2], src_box[1] + src_box[3] // 2)
+        tgt_anchor = (tgt_box[0], tgt_box[1] + tgt_box[3] // 2)
         corridor_x = (src_anchor[0] + tgt_anchor[0]) // 2
         points = [
             (corridor_x, src_anchor[1]),
@@ -1504,10 +1657,32 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
 
     def _container_style(ctype: str) -> str:
         cs = CONTAINER_STYLE_MAP.get(ctype, CONTAINER_STYLE_MAP["subnet"])
+        container_title_size = title_font_size - 2
+        if ctype == "subnet":
+            parts = [
+                "rounded=1",
+                "html=1",
+                "collapsible=0",
+                "absoluteArcSize=1",
+                "arcSize=12",
+                f"fillColor={cs['fill']}",
+                f"strokeColor={cs['outline']}",
+                f"strokeWidth={cs.get('strokeWidth', '1')}",
+                f"fontStyle={cs['fontStyle']}",
+                f"fontFamily={font_family}",
+                f"fontSize={container_title_size}",
+                "verticalAlign=top",
+                "align=left",
+                "spacingLeft=10",
+                "spacingTop=2",
+            ]
+            if cs["dashed"] == "1":
+                parts.append("dashed=1")
+                parts.append(f"dashPattern={cs['dashPattern']}")
+            return ";".join(parts)
+
         # Lighter container: rounded corners, left-aligned label, smaller title
         base = "swimlane;html=1;collapsible=0;swimlaneLine=0;rounded=1;absoluteArcSize=1;arcSize=12;"
-        # Title font: smaller than body, left-aligned (like external repo)
-        container_title_size = title_font_size - 2
         parts = [
             f"startSize={cs['startSize']}",
             f"fillColor={cs['fill']}",
@@ -1525,6 +1700,66 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
             parts.append("dashed=1")
             parts.append(f"dashPattern={cs['dashPattern']}")
         return base + ";".join([""] + parts)
+
+    def _container_start_size(ctype: str) -> int:
+        if ctype == "subnet":
+            return max(SUBNET_LABEL_SPACE - CONTAINER_TITLE_GAP, 0)
+        return int(CONTAINER_STYLE_MAP[ctype]["startSize"])
+
+    def _container_header_height(ctype: str) -> int:
+        if ctype == "subnet":
+            return SUBNET_LABEL_SPACE
+        return int(CONTAINER_STYLE_MAP[ctype]["startSize"]) + CONTAINER_TITLE_GAP
+
+    def _node_layer_rank(node: dict, container_id: str) -> tuple[int, str]:
+        label = container_by_id.get(container_id, {}).get("label", "").lower()
+        product = (node.get("product") or "").lower()
+        if any(k in label for k in ("data", "db", "storage")):
+            if product in {"dataarts", "dataarts studio"}:
+                return (0, node["label"].lower())
+            if product in {"dws", "dli", "mrs"}:
+                return (1, node["label"].lower())
+            if product in {"obs", "cdm", "cloud data migration (cdm)"}:
+                return (2, node["label"].lower())
+        return (1, node["label"].lower())
+
+    def _is_big_data_data_container(cid: str, container_nodes: list[dict]) -> bool:
+        label = container_by_id.get(cid, {}).get("label", "").lower()
+        if not any(k in label for k in ("data", "db", "storage")):
+            return False
+        products = {(n.get("product") or "").lower() for n in container_nodes}
+        return bool(products & {"obs", "cdm", "cloud data migration (cdm)", "dws", "dli", "mrs", "dataarts", "dataarts studio"})
+
+    def _layout_big_data_nodes(
+        cid: str,
+        container_nodes: list[dict],
+        *,
+        start_x: int,
+        start_y: int,
+    ) -> list[tuple[dict, int, int, int, int]]:
+        orchestration = [n for n in container_nodes if (n.get("product") or "").lower() in {"dataarts", "dataarts studio"}]
+        analysis = [n for n in container_nodes if (n.get("product") or "").lower() in {"dws", "dli", "mrs"}]
+        storage = [n for n in container_nodes if (n.get("product") or "").lower() in {"obs", "cdm", "cloud data migration (cdm)"}]
+        others = [
+            n for n in container_nodes
+            if n not in orchestration and n not in analysis and n not in storage
+        ]
+        rows = [orchestration, analysis + others, storage]
+
+        placed: list[tuple[dict, int, int, int, int]] = []
+        cur_y = start_y
+        for row in rows:
+            if not row:
+                continue
+            cur_x = start_x
+            row_h = 0
+            for node in row:
+                nw, nh = measure_node_box(node)
+                placed.append((node, cur_x, cur_y, nw, nh))
+                cur_x += nw + NODE_GAP_X
+                row_h = max(row_h, nh)
+            cur_y += row_h + NODE_GAP_Y
+        return placed
 
     # --- Template-driven rendering (containers) ---
     is_template_spec = "containers" in spec and "template" in spec
@@ -1625,9 +1860,9 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
             if cid in _size_cache:
                 return _size_cache[cid]
             child_ids = children_of.get(cid, [])
-            child_nodes = nodes_by_container.get(cid, [])
+            child_nodes = sorted(nodes_by_container.get(cid, []), key=lambda n: _node_layer_rank(n, cid))
             ctype = container_by_id[cid]["container_type"]
-            start_size = int(CONTAINER_STYLE_MAP[ctype]["startSize"])
+            start_size = _container_start_size(ctype)
 
             # Sort subnets by semantic layer so size matches render order
             if ctype == "vpc":
@@ -1643,6 +1878,30 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
                 container_by_id[ch]["container_type"] == "az" for ch in child_ids
             )
             stack_vertical = ctype == "vpc" or (is_lr and not has_az_children)
+            if _is_big_data_data_container(cid, child_nodes):
+                is_group = ctype in ("az", "as_group", "as_policy")
+                pad_x = CONTAINER_PADDING_X + (GROUP_PADDING_X if is_group else 0)
+                pad_y = CONTAINER_PADDING_Y + (GROUP_PADDING_Y if is_group else 0)
+                header_h = _container_header_height(ctype)
+                grid = _layout_big_data_nodes(cid, child_nodes, start_x=0, start_y=0)
+                nodes_w = max((x + w for _, x, y, w, h in grid), default=0) + CONTAINER_PADDING_X
+                nodes_h = max((y + h for _, x, y, w, h in grid), default=0) + CONTAINER_PADDING_Y
+                if stack_vertical:
+                    child_total_h = sum(s[1] for s in child_sizes) + len(child_sizes) * CONTAINER_PADDING_Y
+                    child_max_w = max((s[0] for s in child_sizes), default=0)
+                    content_w = max(child_max_w if child_sizes else 0, nodes_w)
+                    content_h = (child_total_h if child_sizes else 0) + nodes_h
+                else:
+                    child_total_w = sum(s[0] for s in child_sizes) + max(0, len(child_sizes) - 1) * CONTAINER_PADDING_X
+                    child_max_h = max((s[1] for s in child_sizes), default=0)
+                    content_w = max(child_total_w if child_sizes else 0, nodes_w)
+                    content_h = (child_max_h if child_sizes else 0) + nodes_h
+                result = (
+                    max(content_w + 2 * pad_x, MIN_CONTAINER_W),
+                    max(header_h + content_h + pad_y, MIN_CONTAINER_H),
+                )
+                _size_cache[cid] = result
+                return result
             result = compute_container_size(
                 ctype, child_sizes, child_nodes,
                 is_lr=is_lr, stack_vertical=stack_vertical, start_size=start_size,
@@ -1653,7 +1912,7 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
         # Find root region
         root_id = next(c["id"] for c in containers if c.get("parent_id") is None and c["container_type"] == "region")
 
-        # Nodes outside the region are rendered as a right-side access/integration zone.
+        # Nodes outside the region are rendered as a left-side access/integration zone.
         outside_nodes = [n for n in nodes if n.get("container_id") not in container_by_id]
         user_nodes = [n for n in outside_nodes if n.get("type") == "user"]
         external_nodes = [n for n in outside_nodes if n.get("type") == "external"]
@@ -1697,9 +1956,10 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
             )
             return ranked[0]
 
-        def _filter_render_edges() -> tuple[list[dict], bool]:
+        def _filter_render_edges() -> tuple[list[dict], bool, str | None]:
             kept: list[dict] = []
             has_external_access = False
+            external_targets: list[str] = []
             seen_keys: set[tuple[str, str, str]] = set()
 
             for edge in edges:
@@ -1710,6 +1970,9 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
                 if src in outside_node_ids or tgt in outside_node_ids:
                     if kind == "traffic":
                         has_external_access = True
+                        internal_endpoint = tgt if src in outside_node_ids else src
+                        if internal_endpoint in node_by_id or internal_endpoint in container_by_id:
+                            external_targets.append(internal_endpoint)
                     continue
                 if kind in ("management", "notification"):
                     continue
@@ -1742,9 +2005,17 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
 
             primary_traffic = [e for e in kept if e.get("edge_kind", "traffic") == "traffic"]
             replication = [e for e in kept if e.get("edge_kind") == "replication"]
-            return (primary_traffic + replication)[:MAX_RENDER_EDGES], has_external_access
+            preferred_target = None
+            for target in external_targets:
+                target_node = node_by_id.get(target)
+                if target_node and (target_node.get("product") or "").lower() in {"cdm", "cloud data migration (cdm)"}:
+                    preferred_target = target
+                    break
+            if preferred_target is None and external_targets:
+                preferred_target = external_targets[0]
+            return (primary_traffic + replication)[:MAX_RENDER_EDGES], has_external_access, preferred_target
 
-        render_edges, has_external_access = _filter_render_edges()
+        render_edges, has_external_access, external_target_id = _filter_render_edges()
         public_subnet_id = _find_public_subnet_id()
 
         # Compute full diagram size
@@ -1777,7 +2048,7 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
             is_group = ctype in ("az", "as_group", "as_policy")
             pad_x = CONTAINER_PADDING_X + (GROUP_PADDING_X if is_group else 0)
             pad_y = CONTAINER_PADDING_Y + (GROUP_PADDING_Y if is_group else 0)
-            header_h = int(cs["startSize"]) + CONTAINER_TITLE_GAP
+            header_h = _container_header_height(ctype)
 
             # Render child containers — sort subnets by semantic layer
             child_ids = children_of.get(cid, [])
@@ -1811,7 +2082,7 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
                     child_x += ch_w + CONTAINER_PADDING_X
 
             # Render nodes inside this container using grid layout
-            child_nodes = nodes_by_container.get(cid, [])
+            child_nodes = sorted(nodes_by_container.get(cid, []), key=lambda n: _node_layer_rank(n, cid))
             if child_nodes:
                 # If we had child containers, place nodes below them
                 if child_ids:
@@ -1824,15 +2095,23 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
                     node_y_start = header_h
 
                 # Use grid layout from hld_layout
-                grid = layout_nodes_in_grid(
-                    child_nodes,
-                    # layout_nodes_in_grid compares absolute x positions against
-                    # area_width, so the right boundary must include the start_x offset.
-                    area_width=cw - pad_x,
-                    max_cols=DEFAULT_MAX_COLS,
-                    start_x=pad_x,
-                    start_y=node_y_start,
-                )
+                if _is_big_data_data_container(cid, child_nodes):
+                    grid = _layout_big_data_nodes(
+                        cid,
+                        child_nodes,
+                        start_x=pad_x,
+                        start_y=node_y_start,
+                    )
+                else:
+                    grid = layout_nodes_in_grid(
+                        child_nodes,
+                        # layout_nodes_in_grid compares absolute x positions against
+                        # area_width, so the right boundary must include the start_x offset.
+                        area_width=cw - pad_x,
+                        max_cols=DEFAULT_MAX_COLS,
+                        start_x=pad_x,
+                        start_y=node_y_start,
+                    )
                 for n, nx, ny, nw, nh in grid:
                     primary, rendered_box = _render_icon_node(n, parent_for_children, nx, ny)
                     node_cell_map[n["id"]] = primary
@@ -1844,7 +2123,7 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
                         rendered_box[3],
                     )
 
-        root_x = DIAGRAM_MARGIN
+        root_x = DIAGRAM_MARGIN + (EXTERNAL_NOTE_WIDTH + EXTERNAL_NOTE_GAP if outside_nodes else 0)
 
         # Render root region
         _render_container(root_id, None, root_x, DIAGRAM_MARGIN, root_x, DIAGRAM_MARGIN)
@@ -1852,14 +2131,19 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
         external_zone_cell_id: int | None = None
         external_zone_box: tuple[int, int, int, int] | None = None
         if outside_nodes:
-            ext_x = root_x + root_w + EXTERNAL_NOTE_GAP
+            ext_x = DIAGRAM_MARGIN
             ordered_outside = user_nodes + sorted(external_nodes, key=lambda n: n["label"].lower())
             zone_inner_h = len(ordered_outside) * EXTERNAL_ZONE_ITEM_H + max(0, len(ordered_outside) - 1) * EXTERNAL_ZONE_ITEM_GAP
             zone_h = EXTERNAL_ZONE_HEADER_H + zone_inner_h + 2 * EXTERNAL_ZONE_PADDING
             zone_w = EXTERNAL_NOTE_WIDTH
             public_box = container_positions.get(public_subnet_id) if public_subnet_id else None
-            if public_box:
-                zone_y = max(DIAGRAM_MARGIN, min(DIAGRAM_MARGIN + root_h - zone_h, public_box[1]))
+            target_box = (
+                node_positions.get(external_target_id)
+                or container_positions.get(external_target_id)
+                or public_box
+            )
+            if target_box:
+                zone_y = max(DIAGRAM_MARGIN, min(DIAGRAM_MARGIN + root_h - zone_h, target_box[1]))
             else:
                 zone_y = DIAGRAM_MARGIN + max(0, (root_h - zone_h) // 2)
 
@@ -1889,10 +2173,11 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
                 item_y += EXTERNAL_ZONE_ITEM_H + EXTERNAL_ZONE_ITEM_GAP
                 cell_id += 1
 
-            if has_external_access and public_subnet_id:
+            aggregate_target = external_target_id or public_subnet_id
+            if has_external_access and aggregate_target:
                 render_edges.insert(0, {
                     "source": "__external_zone__",
-                    "target": public_subnet_id,
+                    "target": aggregate_target,
                     "label": "",
                     "edge_kind": "traffic",
                 })
@@ -1932,11 +2217,11 @@ def render_spec_to_drawio_xml(spec: dict, style_preset: dict) -> str:
             entry_hint = ""
             if is_external_zone_edge and src_box and tgt_box:
                 if edge["source"] == "__external_zone__":
-                    exit_hint = "exitX=0.0;exitY=0.5;exitDx=0;exitDy=0;"
-                    entry_hint = "entryX=1.0;entryY=0.5;entryDx=0;entryDy=0;"
-                else:
                     exit_hint = "exitX=1.0;exitY=0.5;exitDx=0;exitDy=0;"
                     entry_hint = "entryX=0.0;entryY=0.5;entryDx=0;entryDy=0;"
+                else:
+                    exit_hint = "exitX=0.0;exitY=0.5;exitDx=0;exitDy=0;"
+                    entry_hint = "entryX=1.0;entryY=0.5;entryDx=0;entryDy=0;"
             elif src_box and tgt_box:
                 exit_hint, entry_hint = route_edge_anchors(src_box, tgt_box)
             if not exit_hint:

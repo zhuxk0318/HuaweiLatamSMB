@@ -31,6 +31,10 @@ CONTAINER_PADDING_Y = 10
 # Extra gap between container title band and first child
 CONTAINER_TITLE_GAP = 4
 
+# Subnets use a plain container, not a swimlane title strip.
+# Reserve enough top space so the first icon row does not overlap the title.
+SUBNET_LABEL_SPACE = 28
+
 # Logical group (AZ, AS Group, AS Policy) extra padding
 GROUP_PADDING_X = 20
 GROUP_PADDING_Y = 8
@@ -58,11 +62,19 @@ SUBNET_LAYER_RANKS: list[tuple[str, int]] = [
     ("dmz", 0),
     ("app", 1),
     ("application", 1),
+    ("compute", 1),
     ("middle", 1),
+    ("orchestration", 2),
+    ("dataarts", 2),
+    ("analysis", 3),
+    ("analytics", 3),
+    ("warehouse", 3),
+    ("processing", 3),
+    ("storage", 4),
+    ("object", 4),
     ("data", 2),
     ("db", 2),
     ("database", 2),
-    ("storage", 2),
     ("mgmt", 3),
     ("management", 3),
     ("admin", 3),

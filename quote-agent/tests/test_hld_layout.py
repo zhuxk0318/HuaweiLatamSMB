@@ -456,7 +456,7 @@ class TestSubnetVerticalStacking:
 # ── Golden-shape: external nodes outside region/vpc ───────────────────────
 
 class TestExternalNodesPlacement:
-    """Verify outside actors render inside a right-side external zone."""
+    """Verify outside actors render inside a left-side external zone."""
 
     def _extract_vertex_abs_positions(self, xml: str) -> dict[str, tuple[int, int, int, int]]:
         """Parse drawio XML for vertex label -> (abs_x, abs_y, w, h)."""
@@ -506,7 +506,7 @@ class TestExternalNodesPlacement:
             result[value] = (int(ax), int(ay), w, h)
         return result
 
-    def test_external_zone_right_of_region_and_stacked(self):
+    def test_external_zone_left_of_region_and_stacked(self):
         spec = {
             "title": "External Node Test",
             "diagram_type": "architecture",
@@ -545,11 +545,10 @@ class TestExternalNodesPlacement:
         assert ext_pos is not None, "External API child container not found"
         assert crm_pos is not None, "CRM System child container not found"
 
-        # Zone should be to the right of internal node
-        ext_right_edge = zone_pos[0]
-        ecs_right_edge = ecs_pos[0] + ecs_pos[2]  # ecs x + w
-        assert ext_right_edge > ecs_right_edge, (
-            f"External zone (x={zone_pos[0]}) should be right of ECS right edge ({ecs_right_edge})"
+        # Zone should be to the left of internal node
+        zone_right_edge = zone_pos[0] + zone_pos[2]
+        assert zone_right_edge < ecs_pos[0], (
+            f"External zone right edge ({zone_right_edge}) should be left of ECS x ({ecs_pos[0]})"
         )
         assert user_pos[1] < ext_pos[1], "User should be above external systems"
         assert user_pos[1] < crm_pos[1], "User should be above external systems"
@@ -816,6 +815,33 @@ class TestCompactSingleRowContainerHeight:
         subnet_h = geoms["Application Subnet"][3]
         assert 120 <= subnet_h <= 140, f"single-row icon container should be compact, got {subnet_h}"
 
+    def test_multi_row_subnet_height_grows(self):
+        spec = {
+            "title": "Multi Row Height Test",
+            "diagram_type": "architecture",
+            "template": "layered_horizontal",
+            "layout": "TB",
+            "containers": [
+                {"id": "region-1", "label": "Region", "container_type": "region", "parent_id": None},
+                {"id": "vpc-1", "label": "VPC", "container_type": "vpc", "parent_id": "region-1"},
+                {"id": "subnet-app", "label": "Application Subnet", "container_type": "subnet", "parent_id": "vpc-1"},
+            ],
+            "nodes": [
+                {"id": f"ecs-{i}", "label": f"ECS-{i}", "type": "service", "container_id": "subnet-app", "product": "ECS"}
+                for i in range(6)
+            ],
+            "edges": [],
+        }
+        style = _load_style_preset()
+        xml = render_spec_to_drawio_xml(spec, style)
+        geoms = TestRenderedNonOverlap()._extract_node_geometries(xml)
+        subnet_box = geoms["Application Subnet"]
+        second_row_node = geoms["ECS-5"]
+        assert subnet_box[3] > 180, f"multi-row subnet should grow taller, got {subnet_box[3]}"
+        assert second_row_node[1] + second_row_node[3] <= subnet_box[1] + subnet_box[3], (
+            f"second row node should stay inside subnet: {second_row_node} vs {subnet_box}"
+        )
+
     def test_dr_subnets_in_vertical_order(self):
         """Within one AZ VPC, business subnets should still stack vertically."""
         spec = TestDR3SectionSkeleton()._make_dr_spec()
@@ -828,6 +854,63 @@ class TestCompactSingleRowContainerHeight:
         assert y_fe is not None
         assert y_data is not None
         assert y_fe < y_data
+
+    def test_big_data_nodes_stack_top_to_bottom_within_one_data_subnet(self):
+        spec = {
+            "title": "Big Data Layout Test",
+            "diagram_type": "architecture",
+            "template": "layered_horizontal",
+            "layout": "TB",
+            "containers": [
+                {"id": "region-1", "label": "Region", "container_type": "region", "parent_id": None},
+                {"id": "vpc-1", "label": "VPC", "container_type": "vpc", "parent_id": "region-1"},
+                {"id": "subnet-app", "label": "Application Subnet", "container_type": "subnet", "parent_id": "vpc-1"},
+                {"id": "subnet-data", "label": "Data Subnet", "container_type": "subnet", "parent_id": "vpc-1"},
+            ],
+            "nodes": [
+                {"id": "ecs", "label": "ECS", "type": "service", "container_id": "subnet-app", "product": "ECS"},
+                {"id": "dataarts", "label": "DataArts", "type": "service", "container_id": "subnet-data", "product": "DataArts Studio"},
+                {"id": "dws", "label": "DWS", "type": "database", "container_id": "subnet-data", "product": "DWS"},
+                {"id": "dli", "label": "DLI", "type": "service", "container_id": "subnet-data", "product": "DLI"},
+                {"id": "mrs", "label": "MRS", "type": "service", "container_id": "subnet-data", "product": "MRS"},
+                {"id": "cdm", "label": "CDM", "type": "service", "container_id": "subnet-data", "product": "Cloud Data Migration (CDM)"},
+                {"id": "obs", "label": "OBS", "type": "service", "container_id": "subnet-data", "product": "OBS"},
+            ],
+            "edges": [],
+        }
+        style = _load_style_preset()
+        xml = render_spec_to_drawio_xml(spec, style)
+        geoms = TestRenderedNonOverlap()._extract_node_geometries(xml)
+        assert geoms["DataArts"][1] < geoms["DWS"][1]
+        assert geoms["DataArts"][1] < geoms["DLI"][1]
+        assert geoms["DWS"][1] < geoms["OBS"][1]
+        assert geoms["DLI"][1] < geoms["CDM"][1]
+
+    def test_subnet_title_stays_above_first_icon_row(self):
+        spec = {
+            "title": "Subnet Title Spacing Test",
+            "diagram_type": "architecture",
+            "template": "layered_horizontal",
+            "layout": "TB",
+            "containers": [
+                {"id": "region-1", "label": "Region", "container_type": "region", "parent_id": None},
+                {"id": "vpc-1", "label": "VPC", "container_type": "vpc", "parent_id": "region-1"},
+                {"id": "subnet-data", "label": "Data Subnet", "container_type": "subnet", "parent_id": "vpc-1"},
+            ],
+            "nodes": [
+                {"id": "obs", "label": "OBS", "type": "service", "container_id": "subnet-data", "product": "OBS"},
+            ],
+            "edges": [],
+        }
+        style = _load_style_preset()
+        xml = render_spec_to_drawio_xml(spec, style)
+        geoms = TestRenderedNonOverlap()._extract_node_geometries(xml)
+        subnet_box = geoms["Data Subnet"]
+        first_icon = geoms["OBS"]
+        title_reserved_bottom = subnet_box[1] + 28
+        assert first_icon[1] >= title_reserved_bottom, (
+            f"first icon should sit below subnet title area: {first_icon} vs {subnet_box}"
+        )
 
 
 # ── Cross-cutting ops node separation ───────────────────────────────────

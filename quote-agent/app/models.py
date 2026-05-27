@@ -568,3 +568,118 @@ class HldRecommendationResponse(BaseModel):
     source: HldRecommendationSource = "fallback_default"
     reasoning_summary: str | None = None
     answer_options: list[str] = Field(default_factory=list)
+
+
+# --- Proposal models ---
+
+ProposalTaskStatus = Literal["queued", "running", "succeeded", "failed"]
+ProposalQuoteMode = Literal["skip", "rvtools", "flexible"]
+ProposalQuoteStatus = Literal["skipped", "succeeded", "failed", "not_implemented", "pending_external_workflow"]
+ProposalHldStatus = Literal["skipped", "succeeded", "failed", "pending_external_workflow"]
+
+
+class ProposalQuoteInput(BaseModel):
+    requirements: list[RequirementItem] = Field(default_factory=list)
+    customer_notes: str = ""
+    region: RegionKey | None = None
+
+
+class ProposalQuoteSummary(BaseModel):
+    total_monthly_price: float = 0
+    currency: str = "USD"
+    quoted_items: int = 0
+    blocker_count: int = 0
+    summary: str = ""
+
+
+class ProposalQuoteResult(BaseModel):
+    status: ProposalQuoteStatus
+    mode: ProposalQuoteMode = "skip"
+    summary: ProposalQuoteSummary = Field(default_factory=ProposalQuoteSummary)
+
+
+ProposalContentStatus = Literal["generated", "fallback"]
+
+
+class ProposalGeneratedSections(BaseModel):
+    executive_summary: str = ""
+    current_challenges: str = ""
+    target_solution: str = ""
+    pricing_summary: str = ""
+    next_steps: str = ""
+    assumptions: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+
+
+class ProposalContentResult(BaseModel):
+    status: ProposalContentStatus
+    model: str | None = None
+    sections: ProposalGeneratedSections = Field(default_factory=ProposalGeneratedSections)
+    error: str | None = None
+
+
+ProposalHldMode = Literal["skip", "create_new"]
+ProposalPriceMode = Literal["skip", "create_new"]
+
+
+class ProposalRequest(BaseModel):
+    project_name: str
+    customer_name: str | None = None
+    country: str | None = None
+    language: LangKey = "en"
+    business_background: str
+    current_pain_points: str
+    target_outcomes: str
+    quote_mode: ProposalQuoteMode = "skip"
+    quote_input: ProposalQuoteInput | None = None
+    preferred_filename: str | None = None
+    hld_requirements: HldRequirements | None = None
+    # Content selection fields
+    proposal_title: str | None = None
+    proposal_subtitle: str | None = None
+    include_hld: bool = False
+    include_price: bool = False
+    include_migration: bool = False
+    include_support_training: bool = False
+    include_huawei_capability: bool = True
+    hld_mode: ProposalHldMode = "skip"
+    price_mode: ProposalPriceMode = "skip"
+    migration_scope: str | None = None
+    migration_constraints: str | None = None
+    migration_notes: str | None = None
+
+
+class ProposalTaskCreatedResponse(BaseModel):
+    task_id: str
+    status: ProposalTaskStatus
+
+
+class ProposalTaskError(BaseModel):
+    message: str
+    detail: str | None = None
+    last_stage: str | None = None
+
+
+class ProposalArtifactInfo(BaseModel):
+    artifact_type: str
+    filename: str
+    size_bytes: int
+
+
+class ProposalArtifacts(BaseModel):
+    json_info: ProposalArtifactInfo | None = None
+    pptx_info: ProposalArtifactInfo | None = None
+    hld_png: ProposalArtifactInfo | None = None
+    hld_drawio: ProposalArtifactInfo | None = None
+
+
+class ProposalTaskResponse(BaseModel):
+    task_id: str
+    status: ProposalTaskStatus
+    current_stage: str | None = None
+    error: ProposalTaskError | None = None
+    artifacts: ProposalArtifacts | None = None
+    hld_design_id: str | None = None
+    created_at: str
+    updated_at: str
+    finished_at: str | None = None

@@ -208,6 +208,15 @@ class TestHierarchyRules:
         with pytest.raises(ValueError, match="must be inside a subnet"):
             parse_architecture_spec(json.dumps(spec))
 
+    def test_ingress_node_not_in_subnet_rejected(self):
+        spec = _make_valid_template_spec()
+        spec["nodes"][0]["id"] = "cdn"
+        spec["nodes"][0]["label"] = "CDN"
+        spec["nodes"][0]["product"] = "CDN"
+        spec["nodes"][0]["container_id"] = "region-1"
+        with pytest.raises(ValueError, match="Ingress/gateway node .* must be inside a frontend/public subnet"):
+            parse_architecture_spec(json.dumps(spec))
+
 
 # ── Spec validation: edge_kind ───────────────────────────────────────────
 
@@ -294,6 +303,22 @@ class TestTemplateRendering:
         # Smaller headers
         assert int(CONTAINER_STYLE_MAP["region"]["startSize"]) <= 20
         assert int(CONTAINER_STYLE_MAP["vpc"]["startSize"]) <= 20
+        assert CONTAINER_STYLE_MAP["subnet"]["startSize"] == "0"
+
+    def test_subnet_renders_without_swimlane_title_bar(self):
+        import xml.etree.ElementTree as ET
+
+        spec = _make_valid_template_spec()
+        style = _load_style_preset()
+        xml = render_spec_to_drawio_xml(spec, style)
+        root = ET.fromstring(xml)
+        subnet_style = None
+        for cell in root.iter("mxCell"):
+            if cell.get("value") == "Application Subnet":
+                subnet_style = cell.get("style", "")
+                break
+        assert subnet_style is not None
+        assert "swimlane" not in subnet_style
 
     def test_edge_kind_visual_semantics(self):
         """Traffic: solid black, replication: dashed black, notification: dashed purple."""
@@ -1231,3 +1256,120 @@ class TestSharedFileStillSFS:
         assert len(sfs_nodes) >= 1
         obs_nodes = [n for n in spec["nodes"] if (n.get("product") or "").lower() == "obs"]
         assert len(obs_nodes) == 0
+
+
+class TestBigDataLayerNormalization:
+    def test_big_data_nodes_stay_in_one_data_subnet(self):
+        requirements = HldRequirements(
+            project_name="Big Data",
+            business_goal="Build a big data analytics platform",
+            architecture_boundary="Huawei Cloud",
+            deployment_mode="cloud",
+            user_access_entry="Web",
+            core_components="DWS, DLI, MRS, DataArts, ECS",
+            external_integrations="External data source",
+            data_stores_flow="CDM loads data to OBS for analytics",
+            network_security_boundary="VPC",
+            preferred_filename=None,
+            language="en",
+        )
+        spec = _make_valid_template_spec()
+        spec["nodes"] = [
+            {"id": "ecs", "label": "ECS", "type": "service", "container_id": "subnet-data", "product": "ECS"},
+            {"id": "obs", "label": "OBS", "type": "service", "container_id": "subnet-data", "product": "OBS"},
+            {"id": "cdm", "label": "CDM", "type": "service", "container_id": "subnet-data", "product": "Cloud Data Migration (CDM)"},
+            {"id": "dws", "label": "DWS", "type": "database", "container_id": "subnet-data", "product": "DWS"},
+            {"id": "dli", "label": "DLI", "type": "service", "container_id": "subnet-data", "product": "DLI"},
+            {"id": "mrs", "label": "MRS", "type": "service", "container_id": "subnet-data", "product": "MRS"},
+            {"id": "dataarts", "label": "DataArts", "type": "service", "container_id": "subnet-data", "product": "DataArts Studio"},
+        ]
+
+        _normalize_spec(spec, SemanticFlags(), requirements)
+
+        containers = {c["id"]: c for c in spec["containers"]}
+        assert containers["subnet-data"]["label"] == "Data Subnet"
+        assert "subnet-data-analysis" not in containers
+        assert "subnet-data-orchestration" not in containers
+
+        node_map = {n["id"]: n for n in spec["nodes"]}
+        assert node_map["obs"]["container_id"] == "subnet-data"
+        assert node_map["cdm"]["container_id"] == "subnet-data"
+        assert node_map["dws"]["container_id"] == "subnet-data"
+        assert node_map["dli"]["container_id"] == "subnet-data"
+        assert node_map["mrs"]["container_id"] == "subnet-data"
+        assert node_map["dataarts"]["container_id"] == "subnet-data"
+        assert node_map["ecs"]["container_id"] == "subnet-app"
+
+    def test_big_data_reuses_existing_private_app_subnet(self):
+        requirements = HldRequirements(
+            project_name="Big Data",
+            business_goal="Build a big data analytics platform",
+            architecture_boundary="Huawei Cloud",
+            deployment_mode="cloud",
+            user_access_entry="Web",
+            core_components="DWS, DataArts, ECS",
+            external_integrations="External data source",
+            data_stores_flow="CDM loads data to OBS for analytics",
+            network_security_boundary="VPC",
+            preferred_filename=None,
+            language="en",
+        )
+        spec = _make_valid_template_spec()
+        spec["containers"][3]["id"] = "subnet-private-app"
+        spec["containers"][3]["label"] = "Private App Subnet"
+        spec["nodes"][1]["container_id"] = "subnet-data"
+
+        _normalize_spec(spec, SemanticFlags(), requirements)
+
+        container_ids = {c["id"] for c in spec["containers"]}
+        assert "subnet-app" not in container_ids
+        node_map = {n["id"]: n for n in spec["nodes"]}
+        assert node_map["ecs"]["container_id"] == "subnet-private-app"
+
+    def test_external_data_ingest_does_not_inject_vpn(self):
+        requirements = HldRequirements(
+            project_name="Big Data",
+            business_goal="Ingest external data",
+            architecture_boundary="On-prem data center sends data to Huawei Cloud",
+            deployment_mode="cloud",
+            user_access_entry="Web",
+            core_components="CDM, OBS, DLI",
+            external_integrations="External data source",
+            data_stores_flow="CDM loads data to OBS for analytics",
+            network_security_boundary="VPC",
+            preferred_filename=None,
+            language="en",
+        )
+        spec = _make_valid_template_spec()
+        spec["nodes"] = [
+            {"id": "ext-data", "label": "External Data Source", "type": "external", "container_id": "outside", "product": None},
+            {"id": "cdm", "label": "CDM", "type": "service", "container_id": "subnet-data", "product": "Cloud Data Migration (CDM)"},
+            {"id": "obs", "label": "OBS", "type": "service", "container_id": "subnet-data", "product": "OBS"},
+        ]
+        spec["edges"] = [{"source": "ext-data", "target": "cdm", "label": "", "edge_kind": "traffic"}]
+
+        _normalize_spec(spec, SemanticFlags(is_hybrid=True), requirements)
+
+        assert not any((n.get("product") or "").lower() == "vpn" for n in spec["nodes"])
+
+    def test_cdn_under_region_is_moved_into_frontend_subnet(self):
+        requirements = HldRequirements(
+            project_name="CDN Fix",
+            business_goal="Serve internet traffic",
+            architecture_boundary="Huawei Cloud",
+            deployment_mode="cloud",
+            user_access_entry="Internet",
+            core_components="CDN, ELB, ECS",
+            external_integrations="None",
+            data_stores_flow="RDS MySQL",
+            network_security_boundary="VPC",
+            preferred_filename=None,
+            language="en",
+        )
+        spec = _make_valid_template_spec()
+        spec["nodes"].append({"id": "cdn", "label": "CDN", "type": "gateway", "container_id": "region-1", "product": "CDN"})
+
+        _normalize_spec(spec, SemanticFlags(), requirements)
+
+        node_map = {n["id"]: n for n in spec["nodes"]}
+        assert node_map["cdn"]["container_id"] == "subnet-fe"

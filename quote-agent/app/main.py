@@ -7,6 +7,7 @@ from app.chat_service import create_chat_session, get_chat_session, register_upl
 from app.flexible_preview_tasks import create_preview_task, get_preview_task
 from app.hld_tasks import create_hld_design_task, get_hld_design_artifact, get_hld_design_task
 from app.hld_recommend import get_recommendation
+from app.proposal_tasks import create_proposal_task, get_proposal_artifact, get_proposal_task
 from app.flexible_pricing import query_flexible_pricing_catalog
 from app.flexible_workflow import (
     build_flexible_preview_response,
@@ -34,6 +35,9 @@ from app.models import (
     QuoteRequest,
     RowQuoteTaskCreatedResponse,
     RowQuoteTaskResponse,
+    ProposalRequest,
+    ProposalTaskCreatedResponse,
+    ProposalTaskResponse,
 )
 from app.row_quote_tasks import cancel_annotation_task, create_annotation_task, get_annotation_task, get_annotation_workbook
 from app.row_quote_workflow import _safe_ascii_filename
@@ -334,6 +338,59 @@ def download_hld_design_png(design_id: str) -> Response:
 @app.get("/api/hld/designs/{design_id}/artifacts/drawio")
 def download_hld_design_drawio(design_id: str) -> Response:
     content, media_type, filename = get_hld_design_artifact(design_id, "drawio")
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# --- Proposal endpoints ---
+
+
+@app.post("/api/proposals/tasks", response_model=ProposalTaskCreatedResponse)
+def create_proposal(request: ProposalRequest) -> ProposalTaskCreatedResponse:
+    return create_proposal_task(request)
+
+
+@app.get("/api/proposals/tasks/{task_id}", response_model=ProposalTaskResponse)
+def get_proposal(task_id: str) -> ProposalTaskResponse:
+    return get_proposal_task(task_id)
+
+
+@app.get("/api/proposals/tasks/{task_id}/artifacts/pptx")
+def download_proposal_pptx(task_id: str) -> Response:
+    content, media_type, filename = get_proposal_artifact(task_id, "pptx")
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/proposals/tasks/{task_id}/artifacts/json")
+def download_proposal_json(task_id: str) -> Response:
+    content, media_type, filename = get_proposal_artifact(task_id, "json")
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/proposals/tasks/{task_id}/artifacts/hld/png")
+def download_proposal_hld_png(task_id: str) -> Response:
+    content, media_type, filename = get_proposal_artifact(task_id, "hld_png")
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/proposals/tasks/{task_id}/artifacts/hld/drawio")
+def download_proposal_hld_drawio(task_id: str) -> Response:
+    content, media_type, filename = get_proposal_artifact(task_id, "hld_drawio")
     return Response(
         content=content,
         media_type=media_type,
