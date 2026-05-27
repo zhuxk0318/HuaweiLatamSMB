@@ -635,7 +635,7 @@ def test_row_quote_workflow_only_processes_first_sheet(monkeypatch: pytest.Monke
     ]
     assert compute.cell(2, compute.max_column - 7).value == 1
     assert compute.cell(2, compute.max_column - 2).value == "已报价"
-    assert "数量按 1 估算" in compute.cell(2, compute.max_column - 1).value
+    assert "Quantity estimated as 1" in compute.cell(2, compute.max_column - 1).value
     assert compute.cell(3, compute.max_column - 2).value == "非报价行"
     assert compute.cell(4, compute.max_column - 2).value == "需人工确认"
 
@@ -756,6 +756,169 @@ def test_row_quote_serverless_header_forces_cci(monkeypatch: pytest.MonkeyPatch)
     annotated = load_workbook(BytesIO(quoted_workbook.content), data_only=True)["容器"]
     assert annotated.cell(2, annotated.max_column - 9).value == "CCI"
     assert annotated.cell(2, annotated.max_column - 2).value == "已报价"
+
+
+def test_row_quote_vm_row_with_spanish_produccion_keeps_ecs_mapping():
+    row = app.row_quote_workflow.RowCandidate(
+        row_id="vInfo!2",
+        sheet="vInfo",
+        row_number=2,
+        cells={
+            "A": "influx-alert-01-devops",
+            "B": "poweredOn",
+            "C": "8",
+            "D": "10240",
+            "E": "/Producción/ESX_FRAME01/Resources",
+            "F": "Ubuntu Linux (64-bit)",
+        },
+        local_cells={
+            "A": "influx-alert-01-devops",
+            "B": "poweredOn",
+            "C": "8",
+            "D": "10240",
+            "E": "/Producción/ESX_FRAME01/Resources",
+            "F": "Ubuntu Linux (64-bit)",
+        },
+        inherited_cells={},
+        header_context=[
+            {
+                "row_id": "vInfo!1",
+                "cells": '{"A":"VM","C":"CPUs","D":"Memory","E":"Resource pool","F":"OS according to VMware Tools"}',
+                "local_cells": "{}",
+                "inherited_cells": "{}",
+            }
+        ],
+    )
+    mapping = RowMapping(
+        row_id="vInfo!2",
+        is_quote_row=True,
+        huawei_product="ECS",
+        huawei_spec="8vCPU 16GB",
+        quantity=1,
+        rationale="VM with vCPU and memory maps to ECS.",
+        confidence=0.9,
+    )
+
+    resolved = app.row_quote_workflow._apply_product_priority(row, mapping)
+
+    assert resolved.huawei_product == "ECS"
+
+
+def test_row_quote_ecs_pricing_uses_original_cpu_memory_not_llm_c7_hint():
+    row = app.row_quote_workflow.RowCandidate(
+        row_id="vInfo!2",
+        sheet="vInfo",
+        row_number=2,
+        cells={
+            "A": "influx-alert-01-devops",
+            "B": "poweredOn",
+            "C": "8",
+            "D": "10240",
+            "E": "/Producción/ESX_FRAME01/Resources",
+        },
+        local_cells={
+            "A": "influx-alert-01-devops",
+            "B": "poweredOn",
+            "C": "8",
+            "D": "10240",
+            "E": "/Producción/ESX_FRAME01/Resources",
+        },
+        inherited_cells={},
+        header_context=[
+            {
+                "row_id": "vInfo!1",
+                "cells": '{"A":"VM","B":"Powerstate","C":"CPUs","D":"Memory","E":"Resource pool"}',
+                "local_cells": "{}",
+                "inherited_cells": "{}",
+            }
+        ],
+    )
+    mapping = RowMapping(
+        row_id="vInfo!2",
+        is_quote_row=True,
+        huawei_product="ECS",
+        huawei_spec="c7.large.2",
+        quantity=1,
+        rationale="Map to general purpose ECS instance c7.",
+        confidence=0.9,
+    )
+
+    result = app.row_quote_workflow._price_row(mapping, row, {"region": "mexico"})
+
+    assert result.status == "Quoted"
+    assert result.spec == "x0.8u.12g"
+    assert "original row CPU/memory" in result.rationale
+    assert "c7" not in result.rationale.lower()
+    assert "general purpose" not in result.rationale.lower()
+
+
+def test_row_quote_forces_template_or_powered_off_vm_to_non_quote(monkeypatch: pytest.MonkeyPatch):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "vInfo"
+    ws.append(["VM", "Powerstate", "Template", "CPUs", "Memory"])
+    ws.append(["tmpl-empty-template", "poweredOff", "True", 4, 8192])
+    ws.append(["active-vm", "poweredOn", "False", 2, 4096])
+    buffer = BytesIO()
+    wb.save(buffer)
+
+    def fake_maas(rows, _quote_context, mapping_progress_callback=None, cancel_check=None):
+        if callable(mapping_progress_callback):
+            mapping_progress_callback(len(rows), len(rows))
+        return {
+            "vInfo!2": RowMapping("vInfo!2", True, "ECS", "c7.xlarge.2", 1, "LLM incorrectly quoted a template VM.", 0.9),
+            "vInfo!3": RowMapping("vInfo!3", True, "ECS", "c7.large.2", 1, "Active VM maps to ECS.", 0.9),
+        }
+
+    monkeypatch.setattr("app.row_quote_workflow._maas_map_rows", fake_maas)
+    workbook, summary = annotate_row_quote_workbook(
+        {"filename": "rvtools.xlsx", "content": buffer.getvalue()},
+        {"region": "mexico", "language": "en", "customer_notes": ""},
+    )
+
+    annotated = load_workbook(BytesIO(workbook.content), data_only=True)
+    sheet = annotated["vInfo"]
+
+    assert summary.non_quote_rows == 1
+    assert summary.quoted_rows == 1
+    assert sheet.cell(2, sheet.max_column - 2).value == "Non-quote row"
+    assert "excluded from quote" in sheet.cell(2, sheet.max_column - 1).value
+    assert sheet.cell(3, sheet.max_column - 2).value == "Quoted"
+
+
+def test_row_quote_collect_rows_keeps_header_context_for_later_rows():
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "vInfo"
+    ws.append(["VM", "Powerstate", "CPUs", "Memory", "Resource pool"])
+    for index in range(1, 9):
+        ws.append([f"vm-{index}", "poweredOn", 4, 16384, "/Producción/ESX_FRAME01/Resources"])
+    buffer = BytesIO()
+    wb.save(buffer)
+
+    workbook = load_workbook(BytesIO(buffer.getvalue()))
+    rows, _original_widths = _collect_rows(workbook)
+    later_row = next(row for row in rows if row.row_number == 9)
+
+    assert any('"CPUs"' in item["cells"] and '"Memory"' in item["cells"] for item in later_row.header_context)
+    assert app.row_quote_workflow._extract_ecs_shape_from_row(later_row) == (4, 16)
+
+
+def test_row_quote_ecs_shape_ignores_previous_data_rows_as_headers():
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "vInfo"
+    ws.append(["VM", "Powerstate", "Template", "CPUs", "Memory", "Annotation"])
+    ws.append(["influx-alert-01-devops", "poweredOn", "False", 8, 10240, "One Core request"])
+    ws.append(["influx-alert-02-devops", "poweredOn", "False", 8, 10240, "One Core request"])
+    ws.append(["influx-alert-03-devops", "poweredOn", "False", 8, 10240, "One Core request"])
+    buffer = BytesIO()
+    wb.save(buffer)
+
+    workbook = load_workbook(BytesIO(buffer.getvalue()))
+    rows, _original_widths = _collect_rows(workbook)
+
+    assert [app.row_quote_workflow._extract_ecs_shape_from_row(row) for row in rows] == [(8, 10), (8, 10), (8, 10)]
 
 
 def test_row_quote_collect_rows_expands_merged_headers_into_cells_and_context():
@@ -1222,3 +1385,57 @@ def test_cancelled_task_export_returns_409(monkeypatch: pytest.MonkeyPatch):
         get_annotation_workbook(task_id)
     assert exc_info.value.status_code == 409
     _clear_tasks()
+
+
+def test_row_quote_default_language_is_english(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("app.row_quote_workflow._maas_map_rows", lambda *_args, **_kwargs: {})
+    workbook, summary = annotate_row_quote_workbook(
+        {"filename": "customer.xlsx", "content": make_row_quote_workbook()},
+        {"region": "mexico", "customer_notes": ""},
+    )
+
+    annotated = load_workbook(BytesIO(workbook.content), data_only=True)
+    compute = annotated["Compute"]
+    appended_headers = [compute.cell(1, column).value for column in range(compute.max_column - 9, compute.max_column + 1)]
+    assert appended_headers == [
+        "Huawei Cloud Product",
+        "Huawei Cloud Spec",
+        "Quantity",
+        "Unit Price",
+        "On-demand Monthly",
+        "Monthly Price",
+        "RI 1Y Monthly",
+        "Quote Status",
+        "Mapping Notes",
+        "Confidence",
+    ]
+    assert compute.cell(2, compute.max_column - 2).value == "Quoted"
+    assert compute.cell(3, compute.max_column - 2).value == "Non-quote row"
+    assert compute.cell(4, compute.max_column - 2).value == "Manual review"
+
+
+def test_row_quote_zh_language_uses_chinese_columns_and_status(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("app.row_quote_workflow._maas_map_rows", lambda *_args, **_kwargs: {})
+    workbook, summary = annotate_row_quote_workbook(
+        {"filename": "customer.xlsx", "content": make_row_quote_workbook()},
+        {"region": "mexico", "language": "zh", "customer_notes": ""},
+    )
+
+    annotated = load_workbook(BytesIO(workbook.content), data_only=True)
+    compute = annotated["Compute"]
+    appended_headers = [compute.cell(1, column).value for column in range(compute.max_column - 9, compute.max_column + 1)]
+    assert appended_headers == [
+        "华为云产品名",
+        "华为云规格",
+        "数量",
+        "单价",
+        "按需月价",
+        "包月价",
+        "RI 1Y月价",
+        "报价状态",
+        "映射说明",
+        "置信度",
+    ]
+    assert compute.cell(2, compute.max_column - 2).value == "已报价"
+    assert compute.cell(3, compute.max_column - 2).value == "非报价行"
+    assert compute.cell(4, compute.max_column - 2).value == "需人工确认"

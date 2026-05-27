@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { trackClick } from "../analytics";
 import type { Lang } from "../data/i18n";
+import { copy as i18nCopy } from "../data/i18n";
 import { HldDesignWizard } from "./HldDesignWizard";
 import type { HldRequirements } from "./HldDesignWizard";
 import { HldDesignResultCard } from "./HldDesignResultCard";
@@ -211,20 +212,6 @@ const capabilityEntries = [
     icon: Calculator,
   },
   {
-    key: "solution",
-    label: "Solution",
-    description: { en: "Browse AI and cloud solution scenarios", es: "Explore escenarios de soluciones AI y cloud", zh: "浏览 AI 与云方案场景", pg: "Explore cenários de soluções AI e cloud" },
-    href: "#/solutions",
-    icon: Layers3,
-  },
-  {
-    key: "migration",
-    label: "Migration",
-    description: { en: "Migration and modernization paths", es: "Rutas de migración y modernización", zh: "迁移与现代化路径", pg: "Rotas de migração e modernização" },
-    href: "#/migration",
-    icon: ArrowUp,
-  },
-  {
     key: "hld",
     label: "HLD Design",
     description: { en: "Generate high-level architecture diagrams", es: "Genere diagramas de arquitectura de alto nivel", zh: "生成高层架构设计图", pg: "Gere diagramas de arquitetura de alto nível" },
@@ -240,13 +227,17 @@ const capabilityEntries = [
   },
 ] as const;
 
-const headerNavItems = [
-  { label: "Home", href: "#/", route: "home" },
-  { label: "Solutions", href: "#/solutions", route: "solutions" },
-  { label: "Migration", href: "#/migration", route: "migration" },
-  { label: "Pricing", href: "#/estimator", route: "pricing" },
-  { label: "HLD Design", href: "#/hld", route: "hld" },
-] as const;
+function getHeaderNavItems(lang: Lang) {
+  const t = i18nCopy[lang];
+  return [
+    { label: t.nav.home, href: "#/", route: "home" },
+    { label: t.nav.solutions, href: "#/solutions", route: "solutions" },
+    { label: t.nav.migration, href: "#/migration", route: "migration" },
+    { label: t.nav.pricing, href: "#/estimator", route: "pricing" },
+    { label: t.nav.hld, href: "#/hld", route: "hld" },
+    { label: t.nav.proposal, href: "#/proposal", route: "proposal" },
+  ] as const;
+}
 
 function createLocalMessageId(prefix: string) {
   if (typeof globalThis.crypto?.randomUUID === "function") {
@@ -263,6 +254,7 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
     currentHash.startsWith("#/migration") ? "migration" :
     currentHash.startsWith("#/estimator") ? "pricing" :
     currentHash.startsWith("#/hld") ? "hld" :
+    currentHash.startsWith("#/proposal") ? "proposal" :
     "home";
   const [sessionId, setSessionId] = useState("");
   const [messages, setMessages] = useState<PortalMessage[]>([]);
@@ -320,14 +312,24 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
     });
   }, [messages, streaming]);
 
-  // Auto-enter HLD mode from #/hld hash
+  // Sync hldMode/proposalMode from hash on every hash change
   useEffect(() => {
-    if (window.location.hash === "#/hld") {
-      setHldMode(true);
-    }
-    if (window.location.hash === "#/proposal") {
-      setProposalMode(true);
-    }
+    const syncModes = () => {
+      const hash = window.location.hash;
+      if (hash === "#/hld") {
+        setHldMode(true);
+        setProposalMode(false);
+      } else if (hash === "#/proposal") {
+        setProposalMode(true);
+        setHldMode(false);
+      } else {
+        setHldMode(false);
+        setProposalMode(false);
+      }
+    };
+    syncModes();
+    window.addEventListener("hashchange", syncModes);
+    return () => window.removeEventListener("hashchange", syncModes);
   }, []);
 
   // HLD submit handler
@@ -727,6 +729,7 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
   }
 
   const welcomeVisible = useMemo(() => !hldMode && !proposalMode && messages.length === 0, [hldMode, proposalMode, messages.length]);
+  const isWorkflowMode = hldMode || proposalMode;
 
   return (
     <main className="chat-portal-page">
@@ -747,7 +750,7 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
           <span>LATAM SMB Solutions</span>
         </a>
         <nav className="main-nav" aria-label="Primary">
-          {headerNavItems.map((item) => (
+          {getHeaderNavItems(lang).map((item) => (
             <a
               key={item.label}
               className={currentRoute === item.route ? "nav-active" : ""}
@@ -775,17 +778,19 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
               中
             </button>
           </div>
-          <button
-            type="button"
-            className="chat-secondary-button"
-            onClick={() => {
-              trackClick({ click_target: "chat_new_conversation", click_section: "chat_header", destination: "new_chat" });
-              void startNewConversation();
-            }}
-          >
-            <MessageSquarePlus size={16} />
-            {t.newChat}
-          </button>
+          {!isWorkflowMode ? (
+            <button
+              type="button"
+              className="chat-secondary-button"
+              onClick={() => {
+                trackClick({ click_target: "chat_new_conversation", click_section: "chat_header", destination: "new_chat" });
+                void startNewConversation();
+              }}
+            >
+              <MessageSquarePlus size={16} />
+              {t.newChat}
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -809,13 +814,13 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
                       onClick={(event) => {
                         if (entry.key === "hld") {
                           event.preventDefault();
-                          setHldMode(true);
+                          window.location.hash = "#/hld";
                           trackClick({ click_target: "chat_entry_hld", click_section: "chat_capability_entries", destination: "hld_wizard" });
                           return;
                         }
                         if (entry.key === "proposal") {
                           event.preventDefault();
-                          setProposalMode(true);
+                          window.location.hash = "#/proposal";
                           trackClick({ click_target: "chat_entry_proposal", click_section: "chat_capability_entries", destination: "proposal_wizard" });
                           return;
                         }
@@ -970,71 +975,73 @@ export function ChatPortal({ lang, setLang }: { lang: Lang; setLang: (lang: Lang
           )}
         </div>
 
-        <div className={welcomeVisible || hldMode || proposalMode ? "chat-composer-shell is-empty" : "chat-composer-shell"}>
-          {uploads.length > 0 ? (
-            <div className="chat-upload-list">
-              <strong>{t.uploads}</strong>
-              <div className="chat-upload-pills">
-                {uploads.map((upload) => (
-                  <span className="chat-upload-pill" key={upload.file_id}>
-                    <FileUp size={14} />
-                    <span>{upload.filename}</span>
-                    <button type="button" aria-label={t.removeFile} onClick={() => removeUpload(upload.file_id)}>
-                      <X size={14} />
-                    </button>
-                  </span>
-                ))}
+        {!isWorkflowMode ? (
+          <div className={welcomeVisible ? "chat-composer-shell is-empty" : "chat-composer-shell"}>
+            {uploads.length > 0 ? (
+              <div className="chat-upload-list">
+                <strong>{t.uploads}</strong>
+                <div className="chat-upload-pills">
+                  {uploads.map((upload) => (
+                    <span className="chat-upload-pill" key={upload.file_id}>
+                      <FileUp size={14} />
+                      <span>{upload.filename}</span>
+                      <button type="button" aria-label={t.removeFile} onClick={() => removeUpload(upload.file_id)}>
+                        <X size={14} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <small>{t.fileReceived}</small>
               </div>
-              <small>{t.fileReceived}</small>
-            </div>
-          ) : null}
+            ) : null}
 
-          <div className="chat-composer">
-            <label className={webSearchEnabled ? "chat-search-toggle is-active" : "chat-search-toggle"}>
-              <input
-                type="checkbox"
-                checked={webSearchEnabled}
-                onChange={(event) => setWebSearchEnabled(event.target.checked)}
+            <div className="chat-composer">
+              <label className={webSearchEnabled ? "chat-search-toggle is-active" : "chat-search-toggle"}>
+                <input
+                  type="checkbox"
+                  checked={webSearchEnabled}
+                  onChange={(event) => setWebSearchEnabled(event.target.checked)}
+                  disabled={bootstrapping || streaming}
+                />
+                <span>{t.webSearch}</span>
+              </label>
+              <button
+                type="button"
+                className="chat-icon-button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading || streaming}
+                aria-label={t.upload}
+              >
+                {uploading ? <LoaderCircle size={18} className="spin-icon" /> : <Paperclip size={18} />}
+              </button>
+              <textarea
+                value={composer}
+                onChange={(event) => setComposer(event.target.value)}
+                onKeyDown={onComposerKeyDown}
+                placeholder={t.placeholder}
+                rows={1}
                 disabled={bootstrapping || streaming}
               />
-              <span>{t.webSearch}</span>
-            </label>
-            <button
-              type="button"
-              className="chat-icon-button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading || streaming}
-              aria-label={t.upload}
-            >
-              {uploading ? <LoaderCircle size={18} className="spin-icon" /> : <Paperclip size={18} />}
-            </button>
-            <textarea
-              value={composer}
-              onChange={(event) => setComposer(event.target.value)}
-              onKeyDown={onComposerKeyDown}
-              placeholder={t.placeholder}
-              rows={1}
-              disabled={bootstrapping || streaming}
-            />
-            <button
-              type="button"
-              className="chat-send-button"
-              onClick={() => void sendMessage()}
-              disabled={!composer.trim() || bootstrapping || streaming}
-            >
-              <ArrowUp size={18} />
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept=".xlsx,.csv,.pdf,.doc,.docx,.txt"
-              hidden
-              onChange={onUploadChange}
-            />
+              <button
+                type="button"
+                className="chat-send-button"
+                onClick={() => void sendMessage()}
+                disabled={!composer.trim() || bootstrapping || streaming}
+              >
+                <ArrowUp size={18} />
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".xlsx,.csv,.pdf,.doc,.docx,.txt"
+                hidden
+                onChange={onUploadChange}
+              />
+            </div>
+            {error ? <p className="form-error chat-form-error">{error}</p> : null}
           </div>
-          {error ? <p className="form-error chat-form-error">{error}</p> : null}
-        </div>
+        ) : null}
       </section>
     </main>
   );

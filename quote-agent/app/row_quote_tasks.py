@@ -121,6 +121,7 @@ def _run_annotation_task(task_id: str, upload: dict[str, Any], quote_context: di
             task["finished_at_epoch"] = time.time()
             _touch(task)
     except Exception as exc:
+        logger.exception("Row-level flexible quote annotation task %s failed", task_id)
         with _lock:
             task = _tasks.get(task_id)
             if not task:

@@ -5,7 +5,10 @@ type Copy = {
     home: string;
     highlights: string;
     solutions: string;
-    quote: string;
+    migration: string;
+    pricing: string;
+    hld: string;
+    proposal: string;
     journey: string;
     resources: string;
   };
@@ -46,7 +49,10 @@ export const copy: Record<Lang, Copy> = {
       home: "Inicio",
       highlights: "Highlights",
       solutions: "Soluciones",
-      quote: "Cotizador cloud",
+      migration: "Migration",
+      pricing: "Pricing",
+      hld: "HLD Design",
+      proposal: "Proposal",
       journey: "Roadmap",
       resources: "Recursos",
     },
@@ -132,7 +138,10 @@ export const copy: Record<Lang, Copy> = {
       home: "Home",
       highlights: "Highlights",
       solutions: "Solutions",
-      quote: "Cloud Estimator",
+      migration: "Migration",
+      pricing: "Pricing",
+      hld: "HLD Design",
+      proposal: "Proposal",
       journey: "Roadmap",
       resources: "Resources",
     },
@@ -218,7 +227,10 @@ export const copy: Record<Lang, Copy> = {
       home: "首页",
       highlights: "亮点",
       solutions: "方案",
-      quote: "报价器",
+      migration: "Migration",
+      pricing: "Pricing",
+      hld: "HLD Design",
+      proposal: "Proposal",
       journey: "路线图",
       resources: "资源",
     },
@@ -304,7 +316,10 @@ export const copy: Record<Lang, Copy> = {
       home: "Início",
       highlights: "Destaques",
       solutions: "Soluções",
-      quote: "Cotação cloud",
+      migration: "Migration",
+      pricing: "Pricing",
+      hld: "HLD Design",
+      proposal: "Proposal",
       journey: "Roteiro",
       resources: "Recursos",
     },

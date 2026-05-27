@@ -14,7 +14,7 @@ import { initAnalytics, trackClick, trackPageView } from "./analytics";
 import { copy, type Lang } from "./data/i18n";
 import { solutionEntries, solutionEntryCards, textFor } from "./data/solutions";
 
-type Route = "home" | "estimator" | "solutionsIndex" | "solution" | "migration" | "hld";
+type Route = "home" | "estimator" | "solutionsIndex" | "solution" | "migration" | "hld" | "proposal";
 
 function getInitialLang(): Lang {
   const stored = window.localStorage.getItem("huawei-latam-smb-lang");
@@ -30,6 +30,9 @@ function getRoute(): Route {
   }
   if (window.location.hash.startsWith("#/hld")) {
     return "hld";
+  }
+  if (window.location.hash.startsWith("#/proposal")) {
+    return "proposal";
   }
   if (window.location.hash.startsWith("#/solutions/")) {
     return "solution";
@@ -55,7 +58,7 @@ function getSolutionsEntryId() {
 }
 
 function scrollForRoute(route: Route) {
-  if (route === "estimator" || route === "solution" || route === "solutionsIndex" || route === "migration") {
+  if (route === "estimator" || route === "solution" || route === "solutionsIndex" || route === "migration" || route === "hld" || route === "proposal") {
     window.scrollTo({ top: 0 });
     return;
   }
@@ -262,7 +265,7 @@ function SiteHeader({
             })
           }
         >
-          Migration
+          {t.nav.migration}
         </a>
         <a
           className={route === "estimator" ? "nav-active" : ""}
@@ -275,7 +278,7 @@ function SiteHeader({
             })
           }
         >
-          {t.nav.quote}
+          {t.nav.pricing}
         </a>
         <a
           className={route === "hld" ? "nav-active" : ""}
@@ -288,7 +291,20 @@ function SiteHeader({
             })
           }
         >
-          HLD Design
+          {t.nav.hld}
+        </a>
+        <a
+          className={route === "proposal" ? "nav-active" : ""}
+          href="#/proposal"
+          onClick={() =>
+            trackClick({
+              click_target: "nav_proposal",
+              click_section: "header",
+              destination: "#/proposal",
+            })
+          }
+        >
+          {t.nav.proposal}
         </a>
       </nav>
       <div className="language-toggle" aria-label="Language">
@@ -616,7 +632,7 @@ function SolutionsIndexPage({ lang }: { lang: Lang }) {
             }
           >
             <Calculator size={18} />
-            {copy[lang].nav.quote}
+            {copy[lang].nav.pricing}
           </a>
         </div>
         <SolutionExplorer lang={lang} initialEntryId={initialEntryId} />
@@ -680,6 +696,10 @@ function App() {
           ? "Huawei LATAM - Solution Detail"
         : route === "migration"
           ? "Huawei LATAM - Migration & Modernization"
+        : route === "hld"
+          ? "Huawei LATAM - HLD Design"
+        : route === "proposal"
+          ? "Huawei LATAM - Proposal"
           : "Huawei LATAM - SMB Advisor";
   }, [route, solutionId]);
 
@@ -693,7 +713,7 @@ function App() {
 
   return (
     <div className="site-shell">
-      {route === "home" || route === "hld" ? (
+      {route === "home" || route === "hld" || route === "proposal" ? (
         <ChatPortal lang={lang} setLang={setLang} />
       ) : (
         <>

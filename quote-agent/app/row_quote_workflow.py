@@ -41,7 +41,20 @@ ROW_QUOTE_MAAS_CONCURRENCY = min(ROW_QUOTE_MAAS_CONCURRENCY, ROW_QUOTE_MAAS_GLOB
 # Process-level semaphore: limits total concurrent MaaS requests across all tasks
 _maas_global_semaphore = threading.BoundedSemaphore(ROW_QUOTE_MAAS_GLOBAL_CONCURRENCY)
 
-ROW_QUOTE_COLUMNS = [
+ROW_QUOTE_COLUMNS_EN = [
+    "Huawei Cloud Product",
+    "Huawei Cloud Spec",
+    "Quantity",
+    "Unit Price",
+    "On-demand Monthly",
+    "Monthly Price",
+    "RI 1Y Monthly",
+    "Quote Status",
+    "Mapping Notes",
+    "Confidence",
+]
+
+ROW_QUOTE_COLUMNS_ZH = [
     "华为云产品名",
     "华为云规格",
     "数量",
@@ -54,10 +67,33 @@ ROW_QUOTE_COLUMNS = [
     "置信度",
 ]
 
-QUOTE_STATUS_QUOTED = "已报价"
-QUOTE_STATUS_NON_QUOTE = "非报价行"
-QUOTE_STATUS_MISSING_PRICE = "缺少价格"
-QUOTE_STATUS_MANUAL = "需人工确认"
+ROW_QUOTE_COLUMNS = ROW_QUOTE_COLUMNS_EN
+
+_QUOTE_STATUS_LABELS: dict[str, dict[str, str]] = {
+    "quoted": {"en": "Quoted", "zh": "已报价"},
+    "non_quote": {"en": "Non-quote row", "zh": "非报价行"},
+    "missing_price": {"en": "Missing price", "zh": "缺少价格"},
+    "manual": {"en": "Manual review", "zh": "需人工确认"},
+}
+
+QUOTE_STATUS_QUOTED = "Quoted"
+QUOTE_STATUS_NON_QUOTE = "Non-quote row"
+QUOTE_STATUS_MISSING_PRICE = "Missing price"
+QUOTE_STATUS_MANUAL = "Manual review"
+
+
+def _quote_language(quote_context: dict[str, Any]) -> str:
+    lang = str(quote_context.get("language", "") or "").strip().lower()
+    return lang if lang in {"zh", "en", "es"} else "en"
+
+
+def _row_quote_columns(lang: str) -> list[str]:
+    return ROW_QUOTE_COLUMNS_ZH if lang == "zh" else ROW_QUOTE_COLUMNS_EN
+
+
+def _status_label(key: str, lang: str) -> str:
+    labels = _QUOTE_STATUS_LABELS.get(key, {})
+    return labels.get(lang) or labels.get("en") or key
 
 NETWORK_PRODUCTS = {"EIP", "NAT Gateway", "VPN", "Direct Connect as a Service", "ELB", "VPC"}
 SECONDS_PER_MONTH = HOURS_PER_MONTH * 3600
@@ -78,7 +114,6 @@ GPU_KEYWORDS = (
 CCI_PRIORITY_KEYWORDS = (
     "serverless",
     "cloud container instance",
-    "cci",
     "pod-cpu",
     "pod cpu",
     "pod-memory",
@@ -258,8 +293,21 @@ def _header_context(
     merged_lookup: dict[tuple[int, int], MergedCellInfo],
 ) -> list[dict[str, str]]:
     context: list[dict[str, str]] = []
+    if row_number > 2:
+        cells, local_cells, inherited_cells = _row_cells(ws, 1, max_col, merged_lookup)
+        if cells:
+            context.append(
+                {
+                    "row_number": "1",
+                    "cells": json.dumps(cells, ensure_ascii=False),
+                    "local_cells": json.dumps(local_cells, ensure_ascii=False),
+                    "inherited_cells": json.dumps(inherited_cells, ensure_ascii=False),
+                }
+            )
     start = max(1, row_number - 5)
     for candidate_row in range(start, row_number):
+        if candidate_row == 1 and context:
+            continue
         cells, local_cells, inherited_cells = _row_cells(ws, candidate_row, max_col, merged_lookup)
         if cells:
             context.append(
@@ -270,6 +318,8 @@ def _header_context(
                     "inherited_cells": json.dumps(inherited_cells, ensure_ascii=False),
                 }
             )
+    if context and context[0].get("row_number") == "1":
+        return [context[0], *context[-2:]]
     return context[-3:]
 
 
@@ -321,6 +371,43 @@ def _joined_header_context(row: RowCandidate) -> str:
     return " ".join(parts)
 
 
+def _iter_table_header_context(row: RowCandidate) -> list[dict[str, str]]:
+    primary_headers = [item for item in row.header_context if str(item.get("row_number")) == "1"]
+    return primary_headers or row.header_context
+
+
+def _value_by_header(row: RowCandidate, patterns: list[str]) -> str | None:
+    for item in _iter_table_header_context(row):
+        try:
+            headers = json.loads(item["cells"])
+        except Exception:
+            continue
+        for column, header in headers.items():
+            header_text = str(header).strip().lower()
+            if any(re.search(pattern, header_text, re.I) for pattern in patterns):
+                value = row.cells.get(column)
+                if value is not None:
+                    return str(value).strip()
+    return None
+
+
+def _forced_non_quote_mapping(row: RowCandidate) -> RowMapping | None:
+    name = _value_by_header(row, [r"\bvm\b", r"\bname\b", r"vm\s*name"])
+    powerstate = _value_by_header(row, [r"power\s*state", r"powerstate"])
+    template = _value_by_header(row, [r"\btemplate\b"])
+    local_text = _joined_local_row(row).lower()
+
+    if template and template.strip().lower() in {"true", "yes", "y", "1"}:
+        return RowMapping(row.row_id, False, rationale="Template VM row is excluded from quote.", confidence=0.95)
+    if name and re.search(r"\b(tmpl|template)\b", name, re.I):
+        return RowMapping(row.row_id, False, rationale="Template VM row is excluded from quote.", confidence=0.95)
+    if re.search(r"\b(tmpl|template)\b", local_text):
+        return RowMapping(row.row_id, False, rationale="Template VM row is excluded from quote.", confidence=0.9)
+    if powerstate and powerstate.strip().lower() in {"poweredoff", "powered off", "off"}:
+        return RowMapping(row.row_id, False, rationale="Powered-off VM row is excluded from quote.", confidence=0.9)
+    return None
+
+
 def _format_quantity(value: float | int | None) -> str | None:
     if value is None:
         return None
@@ -359,7 +446,7 @@ def _looks_like_header_or_group(row: RowCandidate) -> bool:
 
 
 def _extract_quantity(row: RowCandidate) -> float | None:
-    for context_row in reversed(row.header_context):
+    for context_row in _iter_table_header_context(row):
         headers = json.loads(context_row["cells"])
         for column, header in headers.items():
             header_text = str(header).lower()
@@ -414,6 +501,30 @@ def _extract_compute_shape(text: str) -> tuple[int | None, float | None]:
     return cpu, memory
 
 
+def _extract_ecs_shape_from_row(row: RowCandidate) -> tuple[int | None, float | None]:
+    cpu: int | None = None
+    memory: float | None = None
+    for context_row in _iter_table_header_context(row):
+        try:
+            headers = json.loads(context_row["cells"])
+        except Exception:
+            continue
+        for column, header in headers.items():
+            header_text = str(header).strip().lower()
+            value = _to_float(row.cells.get(column))
+            if value is None or value <= 0:
+                continue
+            if cpu is None and re.search(r"\b(num\s*)?(v?cpus?|cores?)\b|核", header_text):
+                cpu = int(value)
+                continue
+            if memory is None and re.search(r"\b(mem|memory|ram)\b|内存", header_text):
+                # RVTools commonly exports Memory in MiB without a unit in the cell.
+                memory = value / 1024 if "mb" in header_text or ("gb" not in header_text and "gib" not in header_text and value > 512) else value
+    if cpu and memory:
+        return cpu, memory
+    return _extract_compute_shape(_joined_row(row))
+
+
 def _extract_cci_resource_kind(text: str) -> str | None:
     lowered = text.lower()
     if any(token in lowered for token in ["pod-cpu", "pod cpu", "pod-核", "pod cpu", "vcpu-second", "cpu-second", "核/秒", "核秒"]):
@@ -463,7 +574,11 @@ def _contains_gpu_terms(*parts: str | None) -> bool:
 
 def _should_force_cci(*parts: str | None) -> bool:
     combined = " ".join(part for part in parts if part).lower()
-    return any(keyword in combined for keyword in CCI_PRIORITY_KEYWORDS)
+    if any(keyword in combined for keyword in CCI_PRIORITY_KEYWORDS):
+        return True
+    # Match CCI only as an explicit product token. Substring matching breaks
+    # Spanish RVTools exports because words such as "Producción" contain "cci".
+    return re.search(r"(?<![a-z0-9])cci(?![a-z0-9])", combined) is not None
 
 
 def _should_force_cce_cluster(*parts: str | None) -> bool:
@@ -516,8 +631,12 @@ def _apply_product_priority(row: RowCandidate, mapping: RowMapping) -> RowMappin
 
 
 def _fallback_mapping(row: RowCandidate) -> RowMapping:
+    forced_non_quote = _forced_non_quote_mapping(row)
+    if forced_non_quote:
+        _debug_log("fallback_mapping", row_id=row.row_id, source="forced_non_quote", mapping=forced_non_quote.__dict__)
+        return forced_non_quote
     if _looks_like_header_or_group(row):
-        mapping = RowMapping(row_id=row.row_id, is_quote_row=False, rationale="空行、标题行或分组行。", confidence=0.9)
+        mapping = RowMapping(row_id=row.row_id, is_quote_row=False, rationale="Empty, header, or group row.", confidence=0.9)
         _debug_log("fallback_mapping", row_id=row.row_id, source="header_or_group", mapping=mapping.__dict__)
         return mapping
     text = _joined_row(row)
@@ -527,10 +646,10 @@ def _fallback_mapping(row: RowCandidate) -> RowMapping:
     combined_text = " ".join([header_text, text]).strip()
     if _should_force_cce_cluster(local_combined):
         quantity = _extract_quantity(row)
-        rationale = "按行内集群管理关键词优先识别为 CCE。"
+        rationale = "In-row cluster management keywords force CCE mapping."
         if quantity is None:
             quantity = 1
-            rationale = f"{rationale} 数量按 1 估算。"
+            rationale = f"{rationale} Quantity estimated as 1."
         mapping = RowMapping(
             row_id=row.row_id,
             is_quote_row=True,
@@ -544,10 +663,10 @@ def _fallback_mapping(row: RowCandidate) -> RowMapping:
         return mapping
     if _should_force_cci(local_combined):
         quantity = _extract_quantity(row)
-        rationale = "按行内 serverless/pod 关键词优先识别为 CCI。"
+        rationale = "In-row serverless/pod keywords force CCI mapping."
         if quantity is None:
             quantity = 1
-            rationale = f"{rationale} 数量按 1 估算。"
+            rationale = f"{rationale} Quantity estimated as 1."
         mapping = RowMapping(
             row_id=row.row_id,
             is_quote_row=True,
@@ -561,10 +680,10 @@ def _fallback_mapping(row: RowCandidate) -> RowMapping:
         return mapping
     if _should_force_cci(combined_text):
         quantity = _extract_quantity(row)
-        rationale = "按 serverless/pod 关键词优先识别为 CCI。"
+        rationale = "Serverless/pod keywords force CCI mapping."
         if quantity is None:
             quantity = 1
-            rationale = f"{rationale} 数量按 1 估算。"
+            rationale = f"{rationale} Quantity estimated as 1."
         mapping = RowMapping(
             row_id=row.row_id,
             is_quote_row=True,
@@ -578,10 +697,10 @@ def _fallback_mapping(row: RowCandidate) -> RowMapping:
         return mapping
     if _should_force_cce_cluster(combined_text):
         quantity = _extract_quantity(row)
-        rationale = "按集群管理关键词优先识别为 CCE。"
+        rationale = "Cluster management keywords force CCE mapping."
         if quantity is None:
             quantity = 1
-            rationale = f"{rationale} 数量按 1 估算。"
+            rationale = f"{rationale} Quantity estimated as 1."
         mapping = RowMapping(
             row_id=row.row_id,
             is_quote_row=True,
@@ -596,10 +715,10 @@ def _fallback_mapping(row: RowCandidate) -> RowMapping:
     product = _normalize_product_name(text)
     if product:
         quantity = _extract_quantity(row)
-        rationale = "按本地关键词识别为可报价行。"
+        rationale = "Matched as quoteable row via local keywords."
         if quantity is None:
             quantity = 1
-            rationale = f"{rationale} 数量按 1 估算。"
+            rationale = f"{rationale} Quantity estimated as 1."
         mapping = RowMapping(
             row_id=row.row_id,
             is_quote_row=True,
@@ -611,7 +730,7 @@ def _fallback_mapping(row: RowCandidate) -> RowMapping:
         )
         _debug_log("fallback_mapping", row_id=row.row_id, source="keyword_match", mapping=mapping.__dict__)
         return mapping
-    mapping = RowMapping(row_id=row.row_id, is_quote_row=True, rationale="行内有内容但无法自动匹配华为云产品。", confidence=0.25)
+    mapping = RowMapping(row_id=row.row_id, is_quote_row=True, rationale="Row has content but no Huawei Cloud product could be auto-matched.", confidence=0.25)
     _debug_log("fallback_mapping", row_id=row.row_id, source="unmatched", mapping=mapping.__dict__)
     return mapping
 
@@ -659,6 +778,15 @@ def resolve_final_mapping(
     raw_mappings: dict[str, RowMapping],
     anchor_plan: AnchorPlan,
 ) -> RowMapping | None:
+    forced_non_quote = _forced_non_quote_mapping(row)
+    if forced_non_quote:
+        _debug_log(
+            "forced_non_quote_override",
+            row_id=row.row_id,
+            raw_mapping=raw_mapping.__dict__ if raw_mapping else None,
+            forced_mapping=forced_non_quote.__dict__,
+        )
+        return forced_non_quote
     if raw_mapping is None:
         return None
     deps = anchor_plan.row_dependencies.get(row.row_id, ())
@@ -970,7 +1098,7 @@ def _price_cce(mapping: RowMapping, region: str, row_text: str, quantity: float)
             spec=mapping.huawei_spec,
             quantity=quantity,
             status=QUOTE_STATUS_MISSING_PRICE,
-            rationale="CCE 管理节点价格未匹配到已确认本地价格。",
+            rationale="CCE management node price did not match any confirmed local price.",
             confidence=mapping.confidence,
         )
     management_monthly = float(selected.price or 0) if selected.billing_mode == "monthly" else 0.0
@@ -1062,27 +1190,53 @@ def _confirmed_flexible_candidates(product: str, region: str, spec_text: str | N
     return candidates
 
 
-def _price_ecs(mapping: RowMapping, region: str, row_text: str, quantity: float) -> PriceResult:
+def _ecs_pricing_rationale(base: str, mapping: RowMapping) -> str:
+    if "quantity estimated as 1" in (mapping.rationale or "").lower():
+        return f"{base} Quantity estimated as 1."
+    return base
+
+
+def _price_ecs(
+    mapping: RowMapping,
+    region: str,
+    row_text: str,
+    quantity: float,
+    original_shape: tuple[int | None, float | None] | None = None,
+) -> PriceResult:
     pricebook = load_pricebook()
     region_catalog = pricebook["pricingCatalog"].get(region)
     if not region_catalog:
-        return PriceResult(status=QUOTE_STATUS_MISSING_PRICE, rationale="本地区没有本地 ECS 价格。", confidence=mapping.confidence)
+        return PriceResult(status=QUOTE_STATUS_MISSING_PRICE, rationale="No local ECS pricing for this region.", confidence=mapping.confidence)
     spec_text = " ".join([mapping.huawei_spec or "", row_text])
-    sku = _extract_sku(spec_text)
+    row_sku = _extract_sku(row_text)
     match = None
-    if sku:
-        match = next((item for item in region_catalog["ecs"] if str(item.get("spec", "")).lower() == sku.lower()), None)
+    rationale = ""
+    cpu, memory = original_shape or (None, None)
+    if cpu and memory:
+        match = pick_ecs_match(region_catalog, cpu, memory)
+        rationale = (
+            f"Matched ECS by original row CPU/memory "
+            f"({cpu}vCPU/{_format_quantity(memory)}GiB) to closest available flavor."
+        )
+    if not match and row_sku:
+        match = next((item for item in region_catalog["ecs"] if str(item.get("spec", "")).lower() == row_sku.lower()), None)
+        if match:
+            rationale = "Matched ECS by explicit SKU in the original row."
     if not match:
         cpu, memory = _extract_compute_shape(spec_text)
         if cpu and memory:
             match = pick_ecs_match(region_catalog, cpu, memory)
+            rationale = (
+                f"Matched ECS by extracted CPU/memory "
+                f"({cpu}vCPU/{_format_quantity(memory)}GiB) to closest available flavor."
+            )
     if not match:
         return PriceResult(
             product_name="ECS",
             spec=mapping.huawei_spec,
             quantity=quantity,
             status=QUOTE_STATUS_MISSING_PRICE,
-            rationale="未能按 ECS 规格匹配本地价格。",
+            rationale="Could not match ECS spec to local pricing.",
             confidence=mapping.confidence,
         )
     unit_price = round(float(match["hourlyUsd"]), 6)
@@ -1098,7 +1252,7 @@ def _price_ecs(mapping: RowMapping, region: str, row_text: str, quantity: float)
         monthly_price=monthly,
         ri_1y_monthly=ri,
         status=QUOTE_STATUS_QUOTED,
-        rationale=mapping.rationale or "ECS 规格按本地价格库匹配。",
+        rationale=_ecs_pricing_rationale(rationale or "ECS spec matched from local pricebook.", mapping),
         confidence=mapping.confidence,
     )
 
@@ -1106,7 +1260,7 @@ def _price_ecs(mapping: RowMapping, region: str, row_text: str, quantity: float)
 def _price_evs(mapping: RowMapping, region: str, row_text: str, quantity: float) -> PriceResult:
     region_catalog = load_pricebook()["pricingCatalog"].get(region)
     if not region_catalog:
-        return PriceResult(product_name="EVS", quantity=quantity, status=QUOTE_STATUS_MISSING_PRICE, rationale="本地区没有本地 EVS 价格。", confidence=mapping.confidence)
+        return PriceResult(product_name="EVS", quantity=quantity, status=QUOTE_STATUS_MISSING_PRICE, rationale="No local EVS pricing for this region.", confidence=mapping.confidence)
     spec_text = " ".join([mapping.huawei_spec or "", row_text])
     key = "sas" if re.search(r"\bsas\b|high\s*i/o|高\s*i/o", spec_text, re.I) else "gpssd"
     capacity = _extract_capacity_gib(spec_text)
@@ -1116,12 +1270,12 @@ def _price_evs(mapping: RowMapping, region: str, row_text: str, quantity: float)
             spec=mapping.huawei_spec,
             quantity=quantity,
             status=QUOTE_STATUS_MISSING_PRICE,
-            rationale="EVS 缺少容量，无法计算 GB 月价。",
+            rationale="EVS capacity missing; cannot compute GB-monthly price.",
             confidence=mapping.confidence,
         )
     item = next((price for price in region_catalog["evs"] if price["key"] == key), None)
     if not item:
-        return PriceResult(product_name="EVS", quantity=quantity, status=QUOTE_STATUS_MISSING_PRICE, rationale="EVS 类型未覆盖。", confidence=mapping.confidence)
+        return PriceResult(product_name="EVS", quantity=quantity, status=QUOTE_STATUS_MISSING_PRICE, rationale="EVS type not covered.", confidence=mapping.confidence)
     unit_price = round(float(item["hourlyUsdPerGb"]), 6)
     ondemand = round(unit_price * HOURS_PER_MONTH * capacity * quantity, 4)
     monthly = round(float(item["monthlyUsdPerGb"]) * capacity * quantity, 4)
@@ -1134,7 +1288,7 @@ def _price_evs(mapping: RowMapping, region: str, row_text: str, quantity: float)
         monthly_price=monthly,
         ri_1y_monthly=None,
         status=QUOTE_STATUS_QUOTED,
-        rationale=mapping.rationale or "EVS 容量按本地价格库计算。",
+        rationale=mapping.rationale or "EVS capacity priced from local pricebook.",
         confidence=mapping.confidence,
     )
 
@@ -1142,7 +1296,7 @@ def _price_evs(mapping: RowMapping, region: str, row_text: str, quantity: float)
 def _price_catalog_product(mapping: RowMapping, region: str, quantity: float) -> PriceResult:
     product = mapping.huawei_product
     if not product:
-        return PriceResult(quantity=quantity, status=QUOTE_STATUS_MANUAL, rationale="无法识别华为云产品。", confidence=mapping.confidence)
+        return PriceResult(quantity=quantity, status=QUOTE_STATUS_MANUAL, rationale="Could not identify Huawei Cloud product.", confidence=mapping.confidence)
     candidates = _confirmed_flexible_candidates(product, region, mapping.huawei_spec)
     if not candidates:
         return PriceResult(
@@ -1150,7 +1304,7 @@ def _price_catalog_product(mapping: RowMapping, region: str, quantity: float) ->
             spec=mapping.huawei_spec,
             quantity=quantity,
             status=QUOTE_STATUS_MISSING_PRICE,
-            rationale="产品或规格未匹配到已确认本地价格。",
+            rationale="Product or spec did not match any confirmed local price.",
             confidence=mapping.confidence,
         )
     item = candidates[0]
@@ -1164,7 +1318,7 @@ def _price_catalog_product(mapping: RowMapping, region: str, quantity: float) ->
         monthly_price=round(price * quantity, 4),
         ri_1y_monthly=None,
         status=QUOTE_STATUS_QUOTED,
-        rationale=mapping.rationale or "按本地 flexible 价格目录匹配。",
+        rationale=mapping.rationale or "Matched from local flexible pricing catalog.",
         confidence=mapping.confidence,
     )
 
@@ -1187,7 +1341,7 @@ def _price_cci(mapping: RowMapping, region: str, quantity: float, row_text: str 
             spec=mapping.huawei_spec,
             quantity=quantity,
             status=QUOTE_STATUS_MISSING_PRICE,
-            rationale="CCI CPU 未匹配到已确认本地价格。",
+            rationale="CCI CPU did not match any confirmed local price.",
             confidence=mapping.confidence,
         )
     if resource_kind == "memory" and not memory_item:
@@ -1196,7 +1350,7 @@ def _price_cci(mapping: RowMapping, region: str, quantity: float, row_text: str 
             spec=mapping.huawei_spec,
             quantity=quantity,
             status=QUOTE_STATUS_MISSING_PRICE,
-            rationale="CCI Memory 未匹配到已确认本地价格。",
+            rationale="CCI Memory did not match any confirmed local price.",
             confidence=mapping.confidence,
         )
     if not resource_kind and (not cpu_item or not memory_item):
@@ -1205,7 +1359,7 @@ def _price_cci(mapping: RowMapping, region: str, quantity: float, row_text: str 
             spec=mapping.huawei_spec,
             quantity=quantity,
             status=QUOTE_STATUS_MISSING_PRICE,
-            rationale="CCI 产品或规格未匹配到已确认本地价格。",
+            rationale="CCI product or spec did not match any confirmed local price.",
             confidence=mapping.confidence,
         )
     if resource_kind == "cpu":
@@ -1215,14 +1369,14 @@ def _price_cci(mapping: RowMapping, region: str, quantity: float, row_text: str 
                 spec=mapping.huawei_spec,
                 quantity=quantity,
                 status=QUOTE_STATUS_MANUAL,
-                rationale="CCI CPU 行需要可识别的 vCPU 数量。",
+                rationale="CCI CPU row requires identifiable vCPU count.",
                 confidence=mapping.confidence,
             )
         cpu_unit_price = float(cpu_item.price or 0)
         monthly = cpu_unit_price * cpu * SECONDS_PER_MONTH
         unit_price = cpu_unit_price * 3600
         spec = f"{cpu:g}vCPU"
-        rationale = mapping.rationale or "按本地 CCI CPU 秒级价格目录估算。"
+        rationale = mapping.rationale or "Estimated from local CCI CPU per-second pricing catalog."
         return PriceResult(
             product_name="CCI",
             spec=spec,
@@ -1242,14 +1396,14 @@ def _price_cci(mapping: RowMapping, region: str, quantity: float, row_text: str 
                 spec=mapping.huawei_spec,
                 quantity=quantity,
                 status=QUOTE_STATUS_MANUAL,
-                rationale="CCI Memory 行需要可识别的 GiB 数量。",
+                rationale="CCI Memory row requires identifiable GiB count.",
                 confidence=mapping.confidence,
             )
         memory_unit_price = float(memory_item.price or 0)
         monthly = memory_unit_price * memory * SECONDS_PER_MONTH
         unit_price = memory_unit_price * 3600
         spec = f"{memory:g}GiB"
-        rationale = mapping.rationale or "按本地 CCI Memory 秒级价格目录估算。"
+        rationale = mapping.rationale or "Estimated from local CCI Memory per-second pricing catalog."
         return PriceResult(
             product_name="CCI",
             spec=spec,
@@ -1268,7 +1422,7 @@ def _price_cci(mapping: RowMapping, region: str, quantity: float, row_text: str 
             spec=mapping.huawei_spec,
             quantity=quantity,
             status=QUOTE_STATUS_MANUAL,
-            rationale="CCI 需要可识别的 vCPU 和内存规格。",
+            rationale="CCI requires identifiable vCPU and memory specs.",
             confidence=mapping.confidence,
         )
     cpu_unit_price = float(cpu_item.price or 0)
@@ -1284,7 +1438,7 @@ def _price_cci(mapping: RowMapping, region: str, quantity: float, row_text: str 
         monthly_price=round(monthly, 4),
         ri_1y_monthly=None,
         status=QUOTE_STATUS_QUOTED,
-        rationale=mapping.rationale or "按本地 CCI CPU/Memory 秒级价格目录估算。",
+        rationale=mapping.rationale or "Estimated from local CCI CPU/Memory per-second pricing catalog.",
         confidence=mapping.confidence,
     )
 
@@ -1308,7 +1462,7 @@ def _price_row(mapping: RowMapping, row: RowCandidate, quote_context: dict[str, 
         _debug_log("price_result", row_id=row.row_id, result=result.__dict__)
         return result
     if not mapping.huawei_product:
-        result = PriceResult(status=QUOTE_STATUS_MANUAL, rationale=mapping.rationale or "无法识别华为云产品。", confidence=mapping.confidence)
+        result = PriceResult(status=QUOTE_STATUS_MANUAL, rationale=mapping.rationale or "Could not identify Huawei Cloud product.", confidence=mapping.confidence)
         _debug_log("price_result", row_id=row.row_id, result=result.__dict__)
         return result
     region = _extract_region(row, quote_context.get("region"))
@@ -1318,7 +1472,7 @@ def _price_row(mapping: RowMapping, row: RowCandidate, quote_context: dict[str, 
             spec=mapping.huawei_spec,
             quantity=mapping.quantity,
             status=QUOTE_STATUS_MANUAL,
-            rationale="缺少报价区域。",
+            rationale="Missing quote region.",
             confidence=mapping.confidence,
         )
         _debug_log("price_result", row_id=row.row_id, result=result.__dict__)
@@ -1327,7 +1481,7 @@ def _price_row(mapping: RowMapping, row: RowCandidate, quote_context: dict[str, 
     rationale = mapping.rationale
     if quantity is None or quantity <= 0:
         quantity = 1
-        rationale = f"{rationale} 数量按 1 估算。".strip()
+        rationale = f"{rationale} Quantity estimated as 1.".strip()
         mapping = RowMapping(
             row_id=mapping.row_id,
             is_quote_row=mapping.is_quote_row,
@@ -1338,7 +1492,7 @@ def _price_row(mapping: RowMapping, row: RowCandidate, quote_context: dict[str, 
             confidence=mapping.confidence,
         )
     if mapping.huawei_product == "ECS":
-        result = _price_ecs(mapping, region, row_text, quantity)
+        result = _price_ecs(mapping, region, row_text, quantity, _extract_ecs_shape_from_row(row))
         _debug_log("price_result", row_id=row.row_id, region=region, result=result.__dict__)
         return result
     if mapping.huawei_product == "EVS":
@@ -1358,10 +1512,11 @@ def _price_row(mapping: RowMapping, row: RowCandidate, quote_context: dict[str, 
     return result
 
 
-def _write_quote_headers(ws: Any, start_col: int) -> None:
+def _write_quote_headers(ws: Any, start_col: int, lang: str = "en") -> None:
     fill = PatternFill(fill_type="solid", fgColor="E6F0FF")
     font = Font(bold=True, color="1F2A44")
-    for offset, header in enumerate(ROW_QUOTE_COLUMNS):
+    columns = _row_quote_columns(lang)
+    for offset, header in enumerate(columns):
         cell = ws.cell(row=1, column=start_col + offset, value=header)
         cell.fill = fill
         cell.font = font
@@ -1370,7 +1525,14 @@ def _write_quote_headers(ws: Any, start_col: int) -> None:
         ws.column_dimensions[get_column_letter(start_col + offset)].width = width
 
 
-def _write_price_result(ws: Any, row_number: int, start_col: int, result: PriceResult) -> None:
+def _write_price_result(ws: Any, row_number: int, start_col: int, result: PriceResult, lang: str = "en") -> None:
+    status_key = {
+        QUOTE_STATUS_QUOTED: "quoted",
+        QUOTE_STATUS_NON_QUOTE: "non_quote",
+        QUOTE_STATUS_MISSING_PRICE: "missing_price",
+        QUOTE_STATUS_MANUAL: "manual",
+    }.get(result.status, "")
+    display_status = _status_label(status_key, lang) if status_key else result.status
     values = [
         result.product_name,
         result.spec,
@@ -1379,7 +1541,7 @@ def _write_price_result(ws: Any, row_number: int, start_col: int, result: PriceR
         result.ondemand_monthly,
         result.monthly_price,
         result.ri_1y_monthly,
-        result.status,
+        display_status,
         result.rationale,
         result.confidence,
     ]
@@ -1449,9 +1611,11 @@ def annotate_row_quote_workbook(upload: dict[str, Any], quote_context: dict[str,
             stage_total_rows=total_rows,
         ))
 
+    lang = _quote_language(quote_context)
+
     for ws in workbook.worksheets[:1]:
         start_col = original_widths[ws.title] + 1
-        _write_quote_headers(ws, start_col)
+        _write_quote_headers(ws, start_col, lang)
 
     raw_mappings: dict[str, RowMapping] = {}
     final_mappings: dict[str, RowMapping] = {}
@@ -1526,7 +1690,7 @@ def annotate_row_quote_workbook(upload: dict[str, Any], quote_context: dict[str,
             result = _price_row(mapping, rows_by_id[row.row_id], quote_context)
             results.append(result)
             ws = workbook[row.sheet]
-            _write_price_result(ws, row.row_number, original_widths[row.sheet] + 1, result)
+            _write_price_result(ws, row.row_number, original_widths[row.sheet] + 1, result, lang)
             priced_row_ids.add(row.row_id)
             priced_count = len(priced_row_ids)
         _emit_progress()
