@@ -38,10 +38,12 @@ from app.models import (
     ProposalRequest,
     ProposalTaskCreatedResponse,
     ProposalTaskResponse,
+    SheetSelection,
 )
 from app.row_quote_tasks import cancel_annotation_task, create_annotation_task, get_annotation_task, get_annotation_workbook
 from app.row_quote_workflow import _safe_ascii_filename
-from app.workflow import build_preview_response, export_graph, preview_graph
+from app.rvtools_preview_tasks import get_preview_state, store_preview_result
+from app.workflow import build_preview_response, export_excel, export_graph, preview_graph, multi_preview_graph, multi_export_graph, parse_rvtools_multi
 
 app = FastAPI(title="LangGraph Quote Agent", version="0.1.0")
 
@@ -106,6 +108,8 @@ def export_quote(
     region: str = Form(...),
     evs_type: str = Form(...),
     lang: str = Form(...),
+    sheet_selection_mode: str = Form(default="first"),
+    sheet_selection_input: str = Form(default=""),
 ) -> Response:
     if not rvtools_file.filename or not rvtools_file.filename.lower().endswith(".xlsx"):
         raise HTTPException(status_code=415, detail="Only RVTools .xlsx files are supported in V1.")
@@ -124,8 +128,10 @@ def export_quote(
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Uploaded RVTools file is empty.")
 
+    sheet_selection = SheetSelection(mode=sheet_selection_mode, selected_input=sheet_selection_input or None)
+
     try:
-        result = export_graph.invoke({"request": request, "file_bytes": file_bytes})
+        result = export_graph.invoke({"request": request, "file_bytes": file_bytes, "sheet_selection": sheet_selection})
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
@@ -141,12 +147,29 @@ def export_quote(
     )
 
 
+@app.get("/api/quotes/tasks/{task_id}/export")
+def export_quote_from_preview(task_id: str) -> Response:
+    state = get_preview_state(task_id)
+    try:
+        export_state = export_excel(state)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    workbook = export_state["workbook"]
+    return Response(
+        content=workbook.content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{workbook.filename}"'},
+    )
+
+
 @app.post("/api/quotes/preview", response_model=QuotePreviewResponse)
 def preview_quote(
     rvtools_file: UploadFile = File(...),
     region: str = Form(...),
     evs_type: str = Form(...),
     lang: str = Form(...),
+    sheet_selection_mode: str = Form(default="first"),
+    sheet_selection_input: str = Form(default=""),
 ) -> QuotePreviewResponse:
     if not rvtools_file.filename or not rvtools_file.filename.lower().endswith(".xlsx"):
         raise HTTPException(status_code=415, detail="Only RVTools .xlsx files are supported in V1.")
@@ -165,8 +188,10 @@ def preview_quote(
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Uploaded RVTools file is empty.")
 
+    sheet_selection = SheetSelection(mode=sheet_selection_mode, selected_input=sheet_selection_input or None)
+
     try:
-        result = preview_graph.invoke({"request": request, "file_bytes": file_bytes})
+        result = preview_graph.invoke({"request": request, "file_bytes": file_bytes, "sheet_selection": sheet_selection})
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
@@ -174,7 +199,125 @@ def preview_quote(
     except Exception as exc:
         return JSONResponse(status_code=500, content={"detail": str(exc)})
 
-    return build_preview_response(result)
+    preview_resp = build_preview_response(result)
+    task_id = store_preview_result(preview_resp, result)
+    preview_resp.task_id = task_id
+    return preview_resp
+
+
+# ── Multi-file RVTools endpoints (Phase 6) ────────────────────────────────────────
+
+
+@app.post("/api/quotes/multi/preview", response_model=QuotePreviewResponse)
+def preview_quote_multi(
+    files: list[UploadFile] = File(...),
+    region: str = Form(...),
+    evs_type: str = Form(...),
+    lang: str = Form(...),
+    sheet_selection_mode: str = Form(default="first"),
+    sheet_selection_input: str = Form(default=""),
+) -> QuotePreviewResponse:
+    """Preview quote from multiple RVTools/inventory files."""
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one file is required.")
+
+    file_entries: list[dict] = []
+    source_filenames: list[str] = []
+    for f in files:
+        if not f.filename or not f.filename.lower().endswith((".xlsx", ".xls", ".csv")):
+            raise HTTPException(status_code=415, detail=f"File '{f.filename}' is not a supported format (.xlsx/.xls/.csv).")
+        content = f.file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail=f"File '{f.filename}' is empty.")
+        file_entries.append({"filename": f.filename, "content": content})
+        source_filenames.append(f.filename)
+
+    try:
+        request = QuoteRequest(
+            region=region,
+            evs_type=evs_type,
+            lang=lang,
+            source_filename=source_filenames[0] if len(source_filenames) == 1 else f"{len(source_filenames)}_files",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    sheet_selection = SheetSelection(mode=sheet_selection_mode, selected_input=sheet_selection_input or None)
+
+    try:
+        result = multi_preview_graph.invoke({
+            "request": request,
+            "files": file_entries,
+            "sheet_selection": sheet_selection,
+        })
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+    preview_resp = build_preview_response(result)
+    task_id = store_preview_result(preview_resp, result)
+    preview_resp.task_id = task_id
+    return preview_resp
+
+
+@app.post("/api/quotes/multi/export")
+def export_quote_multi(
+    files: list[UploadFile] = File(...),
+    region: str = Form(...),
+    evs_type: str = Form(...),
+    lang: str = Form(...),
+    sheet_selection_mode: str = Form(default="first"),
+    sheet_selection_input: str = Form(default=""),
+) -> Response:
+    """Export quote from multiple RVTools/inventory files."""
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one file is required.")
+
+    file_entries: list[dict] = []
+    source_filenames: list[str] = []
+    for f in files:
+        if not f.filename or not f.filename.lower().endswith((".xlsx", ".xls", ".csv")):
+            raise HTTPException(status_code=415, detail=f"File '{f.filename}' is not a supported format (.xlsx/.xls/.csv).")
+        content = f.file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail=f"File '{f.filename}' is empty.")
+        file_entries.append({"filename": f.filename, "content": content})
+        source_filenames.append(f.filename)
+
+    try:
+        request = QuoteRequest(
+            region=region,
+            evs_type=evs_type,
+            lang=lang,
+            source_filename=source_filenames[0] if len(source_filenames) == 1 else f"{len(source_filenames)}_files",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    sheet_selection = SheetSelection(mode=sheet_selection_mode, selected_input=sheet_selection_input or None)
+
+    try:
+        result = multi_export_graph.invoke({
+            "request": request,
+            "files": file_entries,
+            "sheet_selection": sheet_selection,
+        })
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+    workbook = result["workbook"]
+    return Response(
+        content=workbook.content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{workbook.filename}"'},
+    )
 
 
 def _read_flexible_files(files: list[UploadFile]) -> list[dict[str, bytes | str]]:
@@ -203,13 +346,17 @@ def create_flexible_annotate_task(
     region: str | None = Form(default=None),
     lang: str = Form(default="en"),
     customer_notes: str = Form(default=""),
+    sheet_selection_mode: str = Form(default="first"),
+    sheet_selection_input: str = Form(default=""),
 ) -> RowQuoteTaskCreatedResponse:
     if not customer_notes.strip():
         raise HTTPException(status_code=422, detail="customer_notes is required. Provide AI quote guidance for the annotation task.")
     upload = _read_single_excel(flexible_file)
+    sheet_selection = SheetSelection(mode=sheet_selection_mode, selected_input=sheet_selection_input or None)
     return create_annotation_task(
         upload,
         {"region": region or None, "language": lang, "customer_notes": customer_notes},
+        sheet_selection=sheet_selection,
     )
 
 
@@ -240,6 +387,8 @@ def create_flexible_preview_task(
     region: str | None = Form(default=None),
     lang: str = Form(default="en"),
     customer_notes: str = Form(default=""),
+    sheet_selection_mode: str = Form(default="first"),
+    sheet_selection_input: str = Form(default=""),
 ) -> FlexiblePreviewTaskCreatedResponse:
     uploads = _read_flexible_files(flexible_files)
     return create_preview_task(
@@ -259,6 +408,8 @@ def preview_flexible_quote(
     region: str | None = Form(default=None),
     lang: str = Form(default="en"),
     customer_notes: str = Form(default=""),
+    sheet_selection_mode: str = Form(default="first"),
+    sheet_selection_input: str = Form(default=""),
 ) -> FlexibleQuotePreviewResponse:
     try:
         state = flexible_preview_graph.invoke(

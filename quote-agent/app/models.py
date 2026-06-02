@@ -6,9 +6,63 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 
+SheetSelectionMode = Literal["first", "all", "selected"]
+
+
+class SheetSelection(BaseModel):
+    mode: SheetSelectionMode = "first"
+    selected_input: str | None = None
+
+
+class SheetSelectionError(ValueError):
+    pass
+
+
+def resolve_sheet_selection(
+    sheet_names: list[str],
+    selection: SheetSelection,
+) -> list[str]:
+    if not sheet_names:
+        return []
+    if selection.mode == "first":
+        return [sheet_names[0]]
+    if selection.mode == "all":
+        return list(sheet_names)
+    # mode == "selected"
+    raw = (selection.selected_input or "").strip()
+    if not raw:
+        raise SheetSelectionError("selected_input is required when mode is 'selected'.")
+    tokens = [token.strip() for token in raw.split(",") if token.strip()]
+    if not tokens:
+        raise SheetSelectionError("selected_input contains no valid tokens.")
+    result: list[str] = []
+    seen: set[str] = set()
+    errors: list[str] = []
+    for token in tokens:
+        if token.isdigit():
+            index = int(token)
+            if index < 1 or index > len(sheet_names):
+                errors.append(f"Sheet index {index} is out of range (1–{len(sheet_names)}).")
+                continue
+            name = sheet_names[index - 1]
+        else:
+            if token not in sheet_names:
+                errors.append(f"Sheet name '{token}' does not exist. Available: {', '.join(sheet_names)}")
+                continue
+            name = token
+        if name not in seen:
+            seen.add(name)
+            result.append(name)
+    if errors:
+        raise SheetSelectionError(" ".join(errors))
+    if not result:
+        raise SheetSelectionError("No valid sheets selected.")
+    return result
+
+
 ActionType = Literal["quote", "exclude_powered_off", "manual_review"]
 RegionKey = Literal["mexico", "chile", "brazil"]
-EvsTypeKey = Literal["gpssd", "sas"]
+EvsTypeKey = Literal["gpssd", "sas", "high-io", "ultra-high-io"]
 LangKey = Literal["es", "en", "zh"]
 FlexibleProductKey = Literal[
     "ECS",
@@ -32,7 +86,17 @@ FlexibleProductKey = Literal[
     "Workspace",
     "DRS",
     "CSS",
+    "LTS",
     "DLI",
+    "DCS",
+    "GeminiDB",
+    "DMS",
+    "DataArts Studio",
+    "Cloud Connect",
+    "DEW",
+    "Anti-DDoS",
+    "CFW",
+    "CES",
     "ModelArts",
     "FunctionGraph",
     "GaussDB",
@@ -59,6 +123,21 @@ class ParsedVM(BaseModel):
     vcpu: int = 0
     memory_gib: float = 0
     disk_gib: float = 0
+    # Non-standard inventory fields (Phase 1)
+    customer: str | None = None
+    workload_type: str | None = None
+    source_sheet: str | None = None
+    source_dc: str | None = None
+    raw_memory_mb: float | None = None
+    raw_storage_mib: float | None = None
+    # LLM / local classification hints (Phase 1 reserved, later phases fill)
+    workload_category: str | None = None
+    storage_class_hint: str | None = None
+    license_hint: str | None = None
+    ecs_family_hint: str | None = None
+    classification_confidence: float | None = None
+    classification_rationale: str | None = None
+    review_flags: list[str] = Field(default_factory=list)
 
 
 class NormalizedVM(ParsedVM):
@@ -72,11 +151,17 @@ class QuoteLine(NormalizedVM):
     ecs_category: str | None = None
     ecs_family_label: str | None = None
     ecs_spec: str | None = None
+    ecs_vcpu: int | None = None
+    ecs_mem: float | None = None
     ecs_ondemand_monthly_usd: float = 0
     ecs_ri_1y_monthly_usd: float = 0
     evs_monthly_usd: float = 0
     total_ondemand_monthly_usd: float = 0
     total_ri_1y_monthly_usd: float = 0
+    # Phase 8C: per-VM ECS/EVS selection fields
+    evs_selected_type: str | None = None
+    evs_selected_label: str | None = None
+    ecs_family_policy: str | None = None
 
 
 class QuoteSummary(BaseModel):
@@ -101,6 +186,7 @@ class QuotePreviewResponse(BaseModel):
     quote_lines: list[QuoteLine] = Field(default_factory=list)
     manual_review_lines: list[QuoteLine] = Field(default_factory=list)
     excluded_lines: list[QuoteLine] = Field(default_factory=list)
+    task_id: str | None = None
 
 
 class QuoteRequest(BaseModel):

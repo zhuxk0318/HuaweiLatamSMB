@@ -10,8 +10,41 @@ CATEGORY_PRIORITY = [
     "General Computing",
     "General Computing-plus",
     "Memory-optimized",
+    "SAP-certified",
 ]
 HOURS_PER_MONTH = 730
+
+# ── Family policy definitions (Phase 8B) ────────────────────────────────────────
+# Each policy maps to an ordered list of (preferred_categories, excluded_categories).
+# The picker tries each tier in order; if all are empty, it falls back to default
+# CATEGORY_PRIORITY with no exclusions.
+
+FAMILY_POLICY_TIERS: dict[str, list[list[str]]] = {
+    "default": [
+        ["General Computing"],
+        ["General Computing-plus"],
+        ["Memory-optimized"],
+        ["SAP-certified"],
+    ],
+    "sap_app": [
+        ["SAP-certified"],           # S-series first for SAP app
+        ["General Computing-plus"],  # C-series fallback
+        ["General Computing"],       # X-series last resort
+        ["Memory-optimized"],
+    ],
+    "sap_db": [
+        ["General Computing-plus"],  # C-series first for SAP DB
+        ["Memory-optimized"],        # M-series second
+        ["SAP-certified"],           # S-series fallback
+        ["General Computing"],       # X-series last resort
+    ],
+    "sap_hana_db": [
+        ["Memory-optimized"],        # M-series first for HANA
+        ["General Computing-plus"],  # C-series second
+        ["SAP-certified"],           # S-series fallback
+        ["General Computing"],       # X-series last resort
+    ],
+}
 
 
 def _rebuild_pricebook_from_catalog(catalog_items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -79,15 +112,48 @@ def load_pricebook() -> dict[str, Any]:
     return _rebuild_pricebook_from_catalog(catalog.get("items", []))
 
 
-def pick_ecs_match(region_catalog: dict[str, Any], vcpu: int, memory_gib: float) -> dict[str, Any] | None:
+def pick_ecs_match(
+    region_catalog: dict[str, Any],
+    vcpu: int,
+    memory_gib: float,
+    strategy: str = "ceil",
+    family_policy: str = "default",
+) -> dict[str, Any] | None:
+    """Pick the best ECS spec for a requested CPU/memory shape.
+
+    Args:
+        region_catalog: Region pricebook dict with "ecs" list.
+        vcpu: Requested vCPU count.
+        memory_gib: Requested memory in GiB.
+        strategy: "ceil" (default) selects the smallest spec that is >=
+            requested CPU and memory within each category tier. "nearest"
+            selects the spec with the smallest combined ratio distance from
+            the requested shape, considering all candidates (not just those
+            >= the request). Tie-breakers for "nearest":
+            1. Lowest score (combined ratio distance).
+            2. Prefers spec that does not undersize (cpu >= requested AND mem >= requested).
+            3. Lower monthly on-demand price.
+            4. Closer vCPU to requested.
+            5. Closer memory to requested.
+            6. Stable sort by spec name.
+        family_policy: Controls category priority order. Supported values:
+            "default" — original priority (General Computing → Computing-plus → Memory → SAP).
+            "sap_app" — SAP-certified first, then C, then X, then M.
+            "sap_db" — C first, then M, then S, then X.
+            "sap_hana_db" — M first, then C, then S, then X.
+    """
+    category_tiers = FAMILY_POLICY_TIERS.get(family_policy, FAMILY_POLICY_TIERS["default"])
+    if strategy == "nearest":
+        return _pick_ecs_nearest(region_catalog, vcpu, memory_gib, category_tiers=category_tiers)
+    # Original "ceil" strategy
     ecs_items = region_catalog["ecs"]
     candidates = [
         item
         for item in ecs_items
         if int(item["vcpu"]) >= vcpu and float(item["memoryGiB"]) >= memory_gib
     ]
-    for category in CATEGORY_PRIORITY:
-        tier = [item for item in candidates if item["category"] == category]
+    for tier_categories in category_tiers:
+        tier = [item for item in candidates if item["category"] in tier_categories]
         if tier:
             return sorted(
                 tier,
@@ -99,3 +165,61 @@ def pick_ecs_match(region_catalog: dict[str, Any], vcpu: int, memory_gib: float)
                 ),
             )[0]
     return None
+
+
+def _pick_ecs_nearest(
+    region_catalog: dict[str, Any],
+    vcpu: int,
+    memory_gib: float,
+    category_tiers: list[list[str]] | None = None,
+) -> dict[str, Any] | None:
+    """Pick ECS spec with the smallest combined ratio distance to the requested shape.
+
+    Scoring:
+        cpu_ratio_diff = abs(candidate_vcpu - requested_vcpu) / max(requested_vcpu, 1)
+        mem_ratio_diff = abs(candidate_mem_gib - requested_mem_gib) / max(requested_mem_gib, 1)
+        score = cpu_ratio_diff + mem_ratio_diff
+
+    Tie-breakers (in order):
+        1. Lower score.
+        2. Prefers spec that does NOT undersize (vcpu >= requested AND mem >= requested).
+        3. Lower monthly on-demand price.
+        4. Closer vCPU to requested (abs diff).
+        5. Closer memory to requested (abs diff).
+        6. Stable sort by spec name.
+    """
+    ecs_items = region_catalog["ecs"]
+    if not ecs_items:
+        return None
+
+    if category_tiers is None:
+        category_tiers = FAMILY_POLICY_TIERS["default"]
+
+    def _sort_key(item: dict[str, Any]) -> tuple:
+        cand_vcpu = int(item["vcpu"])
+        cand_mem = float(item["memoryGiB"])
+        cand_monthly = float(item["hourlyUsd"]) * HOURS_PER_MONTH
+
+        cpu_ratio_diff = abs(cand_vcpu - vcpu) / max(vcpu, 1)
+        mem_ratio_diff = abs(cand_mem - memory_gib) / max(memory_gib, 1)
+        score = cpu_ratio_diff + mem_ratio_diff
+
+        # Tie-breaker: prefer specs that meet or exceed the request (0 = meets, 1 = undersizes)
+        undersizes = 0 if (cand_vcpu >= vcpu and cand_mem >= memory_gib) else 1
+
+        return (
+            score,
+            undersizes,
+            cand_monthly,
+            abs(cand_vcpu - vcpu),
+            abs(cand_mem - memory_gib),
+            str(item["spec"]),
+        )
+
+    for tier_categories in category_tiers:
+        tier = [item for item in ecs_items if item["category"] in tier_categories]
+        if tier:
+            return sorted(tier, key=_sort_key)[0]
+
+    # Fallback: any ECS item if no preferred category matches
+    return sorted(ecs_items, key=_sort_key)[0]

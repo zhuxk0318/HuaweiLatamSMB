@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 import uuid
@@ -15,8 +16,11 @@ from app.models import (
     RowQuoteTaskCreatedResponse,
     RowQuoteTaskError,
     RowQuoteTaskResponse,
+    SheetSelection,
 )
 from app.row_quote_workflow import TaskCancelledError, annotate_row_quote_workbook
+
+logger = logging.getLogger(__name__)
 
 TASK_TTL_SECONDS = 1800
 
@@ -83,7 +87,7 @@ def _is_cancelled(task_id: str) -> bool:
         return bool(task and task.get("cancelled"))
 
 
-def _run_annotation_task(task_id: str, upload: dict[str, Any], quote_context: dict[str, Any]) -> None:
+def _run_annotation_task(task_id: str, upload: dict[str, Any], quote_context: dict[str, Any], sheet_selection: SheetSelection | None = None) -> None:
     def on_progress(progress: RowQuoteProgress) -> None:
         _update_progress(task_id, progress)
         if _is_cancelled(task_id):
@@ -95,7 +99,7 @@ def _run_annotation_task(task_id: str, upload: dict[str, Any], quote_context: di
             raise TaskCancelledError("Task was cancelled by user.")
 
     try:
-        workbook, summary = annotate_row_quote_workbook(upload, quote_context, progress_callback=on_progress, stage_callback=on_stage, cancel_check=lambda: _is_cancelled(task_id))
+        workbook, summary = annotate_row_quote_workbook(upload, quote_context, progress_callback=on_progress, stage_callback=on_stage, cancel_check=lambda: _is_cancelled(task_id), sheet_selection=sheet_selection)
         with _lock:
             task = _tasks.get(task_id)
             if not task:
@@ -137,7 +141,7 @@ def _run_annotation_task(task_id: str, upload: dict[str, Any], quote_context: di
             _touch(task)
 
 
-def create_annotation_task(upload: dict[str, Any], quote_context: dict[str, Any]) -> RowQuoteTaskCreatedResponse:
+def create_annotation_task(upload: dict[str, Any], quote_context: dict[str, Any], sheet_selection: SheetSelection | None = None) -> RowQuoteTaskCreatedResponse:
     _cleanup_expired_tasks()
     task_id = str(uuid.uuid4())
     now = _now_iso()
@@ -155,7 +159,7 @@ def create_annotation_task(upload: dict[str, Any], quote_context: dict[str, Any]
             "finished_at": None,
             "finished_at_epoch": None,
         }
-    worker = threading.Thread(target=_run_annotation_task, args=(task_id, upload, quote_context), daemon=True)
+    worker = threading.Thread(target=_run_annotation_task, args=(task_id, upload, quote_context, sheet_selection), daemon=True)
     worker.start()
     return RowQuoteTaskCreatedResponse(task_id=task_id, status="queued")
 

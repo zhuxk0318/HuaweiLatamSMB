@@ -52,6 +52,7 @@ type RowQuoteTaskResponse = {
 };
 
 type PreviewViewState = "idle" | "ready" | "queued" | "running" | "succeeded" | "failed";
+type SheetSelectionMode = "first" | "all" | "selected";
 
 const regionOrder: PricingRegionKey[] = ["mexico", "chile", "brazil"];
 
@@ -108,6 +109,12 @@ const uiCopy = {
     progressLabelPriceRows: "Cotizadas/Total",
     cancel: "Cancelar",
     cancelFailed: "No se pudo cancelar la tarea.",
+    sheetSelection: "Hojas a procesar",
+    sheetFirst: "Solo la primera hoja",
+    sheetAll: "Todas las hojas",
+    sheetSpecify: "Especificar hojas",
+    sheetSpecifyPlaceholder: "p.ej. Compute, Storage, 1,3",
+    sheetSpecifyEmpty: "Ingrese los nombres o índices de hoja.",
   },
   en: {
     title: "Flexible Quote",
@@ -148,6 +155,12 @@ const uiCopy = {
     progressLabelPriceRows: "Priced/Total",
     cancel: "Cancel",
     cancelFailed: "Failed to cancel the task.",
+    sheetSelection: "Sheets to process",
+    sheetFirst: "First sheet only",
+    sheetAll: "All sheets",
+    sheetSpecify: "Specify sheets",
+    sheetSpecifyPlaceholder: "e.g. Compute, Storage, 1,3",
+    sheetSpecifyEmpty: "Enter sheet names or indexes.",
   },
   zh: {
     title: "Flexible 报价",
@@ -188,6 +201,12 @@ const uiCopy = {
     progressLabelPriceRows: "已报价/总计",
     cancel: "取消",
     cancelFailed: "取消任务失败。",
+    sheetSelection: "处理工作表",
+    sheetFirst: "仅第一个工作表",
+    sheetAll: "所有工作表",
+    sheetSpecify: "指定工作表",
+    sheetSpecifyPlaceholder: "例如 Compute, Storage, 1,3",
+    sheetSpecifyEmpty: "请输入工作表名称或索引。",
   },
   pg: {
     title: "Flexible Quote",
@@ -228,6 +247,12 @@ const uiCopy = {
     progressLabelPriceRows: "Priced/Total",
     cancel: "Cancel",
     cancelFailed: "Failed to cancel the task.",
+    sheetSelection: "Sheets to process",
+    sheetFirst: "First sheet only",
+    sheetAll: "All sheets",
+    sheetSpecify: "Specify sheets",
+    sheetSpecifyPlaceholder: "e.g. Compute, Storage, 1,3",
+    sheetSpecifyEmpty: "Enter sheet names or indexes.",
   },
 } satisfies Record<string, Record<string, string>>;
 
@@ -293,6 +318,8 @@ export function FlexibleQuoteEstimator({ lang }: { lang: Lang }) {
   const [error, setError] = useState("");
   const [exporting, setExporting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [sheetMode, setSheetMode] = useState<SheetSelectionMode>("first");
+  const [sheetInput, setSheetInput] = useState("");
   const pollTokenRef = useRef(0);
 
   useEffect(() => {
@@ -363,6 +390,7 @@ export function FlexibleQuoteEstimator({ lang }: { lang: Lang }) {
   async function runPreview() {
     if (!file) return;
     if (notesEmpty) { setError(t.notesRequired); return; }
+    if (sheetMode === "selected" && !sheetInput.trim()) { setError(t.sheetSpecifyEmpty); return; }
     pollTokenRef.current += 1;
     const token = pollTokenRef.current;
     setPreviewState("queued");
@@ -375,6 +403,10 @@ export function FlexibleQuoteEstimator({ lang }: { lang: Lang }) {
       formData.append("region", quoteContext.region);
       formData.append("lang", quoteContext.language);
       formData.append("customer_notes", quoteContext.customer_notes);
+      formData.append("sheet_selection_mode", sheetMode);
+      if (sheetMode === "selected") {
+        formData.append("sheet_selection_input", sheetInput);
+      }
       const response = await fetch(`${QUOTE_API_BASE_URL}/api/quotes/flexible/annotate/tasks`, { method: "POST", body: formData });
       if (!response.ok) throw new Error(await getErrorDetail(response, t.previewFailed));
       const payload = (await response.json()) as { task_id: string; status: "queued" | "running" };
@@ -485,6 +517,24 @@ export function FlexibleQuoteEstimator({ lang }: { lang: Lang }) {
               disabled={progressBusy}
             />
             {notesEmpty && <p className="form-error">{t.notesRequired}</p>}
+          </div>
+          <div>
+            <strong>{t.sheetSelection}</strong>
+            <div className="segmented-control compact">
+              <button type="button" className={sheetMode === "first" ? "active" : ""} onClick={() => setSheetMode("first")} disabled={progressBusy}>{t.sheetFirst}</button>
+              <button type="button" className={sheetMode === "all" ? "active" : ""} onClick={() => setSheetMode("all")} disabled={progressBusy}>{t.sheetAll}</button>
+              <button type="button" className={sheetMode === "selected" ? "active" : ""} onClick={() => setSheetMode("selected")} disabled={progressBusy}>{t.sheetSpecify}</button>
+            </div>
+            {sheetMode === "selected" && (
+              <input
+                type="text"
+                className="sheet-selection-input"
+                placeholder={t.sheetSpecifyPlaceholder}
+                value={sheetInput}
+                onChange={(e) => setSheetInput(e.target.value)}
+                disabled={progressBusy}
+              />
+            )}
           </div>
         </div>
 

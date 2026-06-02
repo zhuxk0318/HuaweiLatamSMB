@@ -57,6 +57,7 @@ type QuotePreviewResponse = {
   quote_lines: QuoteLine[];
   manual_review_lines: QuoteLine[];
   excluded_lines: QuoteLine[];
+  task_id: string | null;
 };
 
 const uiCopy = {
@@ -99,6 +100,12 @@ const uiCopy = {
     emptyPreview: "Cargue un RVTools .xlsx para ver la cotizacion antes de exportarla.",
     ecsTable: "ECS pricing",
     evsTable: "EVS",
+    sheetSelection: "Hojas a procesar",
+    sheetFirst: "Solo la primera hoja",
+    sheetAll: "Todas las hojas",
+    sheetSpecify: "Especificar hojas",
+    sheetSpecifyPlaceholder: "p.ej. vInfo, Compute, 1,3",
+    sheetSpecifyEmpty: "Ingrese los nombres o índices de hoja.",
   },
   en: {
     kicker: "Cloud quote exporter",
@@ -139,6 +146,12 @@ const uiCopy = {
     emptyPreview: "Upload an RVTools .xlsx to review the quote before exporting.",
     ecsTable: "ECS pricing",
     evsTable: "EVS",
+    sheetSelection: "Sheets to process",
+    sheetFirst: "First sheet only",
+    sheetAll: "All sheets",
+    sheetSpecify: "Specify sheets",
+    sheetSpecifyPlaceholder: "e.g. vInfo, Compute, 1,3",
+    sheetSpecifyEmpty: "Enter sheet names or indexes.",
   },
   zh: {
     kicker: "云报价导出",
@@ -179,6 +192,12 @@ const uiCopy = {
     emptyPreview: "上传 RVTools .xlsx 后，可先查看报价预览再导出。",
     ecsTable: "ECS 价格",
     evsTable: "EVS",
+    sheetSelection: "处理工作表",
+    sheetFirst: "仅第一个工作表",
+    sheetAll: "所有工作表",
+    sheetSpecify: "指定工作表",
+    sheetSpecifyPlaceholder: "例如 vInfo, Compute, 1,3",
+    sheetSpecifyEmpty: "请输入工作表名称或索引。",
   },
   pg: {
     kicker: "Cloud quote exporter",
@@ -219,6 +238,12 @@ const uiCopy = {
     emptyPreview: "Upload an RVTools .xlsx to review the quote before exporting.",
     ecsTable: "ECS pricing",
     evsTable: "EVS",
+    sheetSelection: "Sheets to process",
+    sheetFirst: "First sheet only",
+    sheetAll: "All sheets",
+    sheetSpecify: "Specify sheets",
+    sheetSpecifyPlaceholder: "e.g. vInfo, Compute, 1,3",
+    sheetSpecifyEmpty: "Enter sheet names or indexes.",
   },
 } satisfies Record<Lang, Record<string, string>>;
 
@@ -271,21 +296,34 @@ function triggerDownload(blob: Blob, filename: string) {
 }
 
 async function getErrorDetail(response: Response, fallback: string) {
-  const payload = await response.json().catch(() => null);
-  return payload?.detail || fallback;
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    const payload = await response.json().catch(() => null);
+    return payload?.detail || fallback;
+  }
+
+  const text = (await response.text().catch(() => "")).trim();
+  if (text) {
+    return text.length > 600 ? `${text.slice(0, 600)}...` : text;
+  }
+  return fallback;
 }
+
+type SheetSelectionMode = "first" | "all" | "selected";
 
 export function PricingEstimator({ lang }: { lang: Lang }) {
   const t = uiCopy[lang];
   const [regionKey, setRegionKey] = useState<PricingRegionKey>("mexico");
   const [evsKey, setEvsKey] = useState<EvsTypeKey>("gpssd");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [previewResult, setPreviewResult] = useState<QuotePreviewResponse | null>(null);
   const [status, setStatus] = useState(t.noFile);
   const [previewError, setPreviewError] = useState("");
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [lastDownload, setLastDownload] = useState("");
+  const [sheetMode, setSheetMode] = useState<SheetSelectionMode>("first");
+  const [sheetInput, setSheetInput] = useState("");
   const region = pricingCatalog[regionKey];
   const familyCounts = useMemo(
     () =>
@@ -297,14 +335,14 @@ export function PricingEstimator({ lang }: { lang: Lang }) {
   );
 
   useEffect(() => {
-    if (!selectedFile) {
+    if (!selectedFiles.length) {
       setPreviewResult(null);
       setPreviewError("");
       setStatus(t.noFile);
       return;
     }
 
-    const file = selectedFile;
+    const files = selectedFiles;
     const controller = new AbortController();
     let cancelled = false;
 
@@ -314,29 +352,76 @@ export function PricingEstimator({ lang }: { lang: Lang }) {
       setPreviewResult(null);
       setStatus(t.previewing);
 
+      if (sheetMode === "selected" && !sheetInput.trim()) {
+        setIsPreviewing(false);
+        setPreviewError(t.sheetSpecifyEmpty);
+        setStatus(t.fileReady);
+        return;
+      }
+
       try {
         const formData = new FormData();
-        formData.append("rvtools_file", file);
+        for (const file of files) {
+          formData.append("files", file);
+        }
         formData.append("region", regionKey);
         formData.append("evs_type", evsKey);
         formData.append("lang", lang);
-
-        const response = await fetch(`${QUOTE_API_BASE_URL}/api/quotes/preview`, {
-          method: "POST",
-          body: formData,
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error(await getErrorDetail(response, t.previewErrorFallback));
+        formData.append("sheet_selection_mode", sheetMode);
+        if (sheetMode === "selected") {
+          formData.append("sheet_selection_input", sheetInput);
         }
 
-        const payload = (await response.json()) as QuotePreviewResponse;
-        if (cancelled) {
-          return;
+        const endpoint = files.length === 1
+          ? `${QUOTE_API_BASE_URL}/api/quotes/preview`
+          : `${QUOTE_API_BASE_URL}/api/quotes/multi/preview`;
+
+        // For single file, use the legacy endpoint with "rvtools_file" field name
+        if (files.length === 1) {
+          const singleFormData = new FormData();
+          singleFormData.append("rvtools_file", files[0]);
+          singleFormData.append("region", regionKey);
+          singleFormData.append("evs_type", evsKey);
+          singleFormData.append("lang", lang);
+          singleFormData.append("sheet_selection_mode", sheetMode);
+          if (sheetMode === "selected") {
+            singleFormData.append("sheet_selection_input", sheetInput);
+          }
+
+          const response = await fetch(`${QUOTE_API_BASE_URL}/api/quotes/preview`, {
+            method: "POST",
+            body: singleFormData,
+            signal: controller.signal,
+          });
+
+          if (!response.ok) {
+            throw new Error(await getErrorDetail(response, t.previewErrorFallback));
+          }
+
+          const payload = (await response.json()) as QuotePreviewResponse;
+          if (cancelled) {
+            return;
+          }
+          setPreviewResult(payload);
+          setStatus(t.previewSuccess);
+        } else {
+          const response = await fetch(endpoint, {
+            method: "POST",
+            body: formData,
+            signal: controller.signal,
+          });
+
+          if (!response.ok) {
+            throw new Error(await getErrorDetail(response, t.previewErrorFallback));
+          }
+
+          const payload = (await response.json()) as QuotePreviewResponse;
+          if (cancelled) {
+            return;
+          }
+          setPreviewResult(payload);
+          setStatus(t.previewSuccess);
         }
-        setPreviewResult(payload);
-        setStatus(t.previewSuccess);
       } catch (err) {
         if (controller.signal.aborted || cancelled) {
           return;
@@ -357,22 +442,39 @@ export function PricingEstimator({ lang }: { lang: Lang }) {
       cancelled = true;
       controller.abort();
     };
-  }, [selectedFile, regionKey, evsKey, lang, t.noFile, t.previewErrorFallback, t.previewSuccess, t.previewing, t.fileReady]);
+  }, [
+    selectedFiles,
+    regionKey,
+    evsKey,
+    lang,
+    sheetMode,
+    sheetInput,
+    t.noFile,
+    t.previewErrorFallback,
+    t.previewSuccess,
+    t.previewing,
+    t.fileReady,
+    t.sheetSpecifyEmpty,
+  ]);
 
   async function onFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) {
+    const files = Array.from(event.target.files ?? []);
+    if (!files.length) {
       return;
     }
     event.target.value = "";
 
-    if (!file.name.toLowerCase().endsWith(".xlsx")) {
-      setSelectedFile(null);
-      setPreviewResult(null);
-      setLastDownload("");
-      setStatus(t.noFile);
-      setPreviewError(t.invalidFile);
-      return;
+    const validFiles: File[] = [];
+    for (const file of files) {
+      if (!file.name.toLowerCase().endsWith(".xlsx")) {
+        setSelectedFiles([]);
+        setPreviewResult(null);
+        setLastDownload("");
+        setStatus(t.noFile);
+        setPreviewError(t.invalidFile);
+        return;
+      }
+      validFiles.push(file);
     }
 
     trackClick({
@@ -383,14 +485,14 @@ export function PricingEstimator({ lang }: { lang: Lang }) {
       evs_key: evsKey,
     });
 
-    setSelectedFile(file);
+    setSelectedFiles(validFiles);
     setLastDownload("");
     setStatus(t.fileReady);
     setPreviewError("");
   }
 
   async function onExportClick() {
-    if (!selectedFile || !previewResult) {
+    if (!previewResult) {
       return;
     }
 
@@ -407,16 +509,47 @@ export function PricingEstimator({ lang }: { lang: Lang }) {
     setStatus(t.exporting);
 
     try {
-      const formData = new FormData();
-      formData.append("rvtools_file", selectedFile);
-      formData.append("region", regionKey);
-      formData.append("evs_type", evsKey);
-      formData.append("lang", lang);
+      let response: Response;
 
-      const response = await fetch(`${QUOTE_API_BASE_URL}/api/quotes/export`, {
-        method: "POST",
-        body: formData,
-      });
+      if (previewResult.task_id) {
+        response = await fetch(`${QUOTE_API_BASE_URL}/api/quotes/tasks/${previewResult.task_id}/export`);
+      } else {
+        const formData = new FormData();
+        for (const file of selectedFiles) {
+          formData.append("files", file);
+        }
+        formData.append("region", regionKey);
+        formData.append("evs_type", evsKey);
+        formData.append("lang", lang);
+        formData.append("sheet_selection_mode", sheetMode);
+        if (sheetMode === "selected") {
+          formData.append("sheet_selection_input", sheetInput);
+        }
+        const exportEndpoint = selectedFiles.length === 1
+          ? `${QUOTE_API_BASE_URL}/api/quotes/export`
+          : `${QUOTE_API_BASE_URL}/api/quotes/multi/export`;
+        // For single file fallback, use legacy field name
+        if (selectedFiles.length === 1) {
+          const singleFormData = new FormData();
+          singleFormData.append("rvtools_file", selectedFiles[0]);
+          singleFormData.append("region", regionKey);
+          singleFormData.append("evs_type", evsKey);
+          singleFormData.append("lang", lang);
+          singleFormData.append("sheet_selection_mode", sheetMode);
+          if (sheetMode === "selected") {
+            singleFormData.append("sheet_selection_input", sheetInput);
+          }
+          response = await fetch(`${QUOTE_API_BASE_URL}/api/quotes/export`, {
+            method: "POST",
+            body: singleFormData,
+          });
+        } else {
+          response = await fetch(exportEndpoint, {
+            method: "POST",
+            body: formData,
+          });
+        }
+      }
 
       if (!response.ok) {
         throw new Error(await getErrorDetail(response, t.downloadError));
@@ -435,7 +568,7 @@ export function PricingEstimator({ lang }: { lang: Lang }) {
     }
   }
 
-  const canExport = Boolean(selectedFile && previewResult && !isPreviewing && !isExporting);
+  const canExport = Boolean(previewResult && !isPreviewing && !isExporting);
 
   return (
     <section id="quote" className="pricing-section">
@@ -449,7 +582,7 @@ export function PricingEstimator({ lang }: { lang: Lang }) {
           <label className="upload-button">
             <UploadCloud size={18} />
             {t.upload}
-            <input type="file" accept=".xlsx" onChange={onFileChange} disabled={isPreviewing || isExporting} />
+            <input type="file" accept=".xlsx" multiple onChange={onFileChange} disabled={isPreviewing || isExporting} />
           </label>
           <button type="button" className="upload-button secondary" onClick={onExportClick} disabled={!canExport}>
             <Download size={18} />
@@ -513,6 +646,24 @@ export function PricingEstimator({ lang }: { lang: Lang }) {
             ))}
           </div>
         </div>
+        <div>
+          <strong>{t.sheetSelection}</strong>
+          <div className="segmented-control compact">
+            <button type="button" className={sheetMode === "first" ? "active" : ""} onClick={() => setSheetMode("first")}>{t.sheetFirst}</button>
+            <button type="button" className={sheetMode === "all" ? "active" : ""} onClick={() => setSheetMode("all")}>{t.sheetAll}</button>
+            <button type="button" className={sheetMode === "selected" ? "active" : ""} onClick={() => setSheetMode("selected")}>{t.sheetSpecify}</button>
+          </div>
+          {sheetMode === "selected" && (
+            <input
+              type="text"
+              className="sheet-selection-input"
+              placeholder={t.sheetSpecifyPlaceholder}
+              value={sheetInput}
+              onChange={(e) => setSheetInput(e.target.value)}
+              disabled={isPreviewing || isExporting}
+            />
+          )}
+        </div>
       </div>
 
       <div className="pricing-dashboard">
@@ -525,7 +676,7 @@ export function PricingEstimator({ lang }: { lang: Lang }) {
           <div className="quote-metrics quote-metrics-extended">
             <span>
               <small>{t.selectedFile}</small>
-              <strong>{selectedFile?.name || "-"}</strong>
+              <strong>{selectedFiles.length === 0 ? "-" : selectedFiles.length === 1 ? selectedFiles[0].name : `${selectedFiles.length} files: ${selectedFiles.map(f => f.name).join(", ")}`}</strong>
             </span>
             <span>
               <small>{t.lastDownload}</small>
