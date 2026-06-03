@@ -113,7 +113,7 @@ FlexibleRequirementStatus = Literal[
 FlexiblePriceStatus = Literal["confirmed", "capture_error", "pending_confirmation"]
 FlexibleQuotePurpose = Literal["purchase_quote", "unit_price_comparison", "migration_estimate", "unknown"]
 FlexibleQuantityPolicy = Literal["required", "default_to_one_for_unit_price", "derive_from_rows"]
-FlexibleQuantitySource = Literal["source_file", "human_feedback", "inferred_unit_price"]
+FlexibleQuantitySource = Literal["source_file", "human_feedback", "inferred_unit_price", "billing_standardized"]
 
 
 class ParsedVM(BaseModel):

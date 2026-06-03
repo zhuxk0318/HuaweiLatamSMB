@@ -775,6 +775,26 @@ def _copy_row_style(ws: Any, src_row: int, dst_row: int, max_col: int) -> None:
             dst.protection = copy(src.protection)
 
 
+def _copy_cell_style(ws: Any, src_row: int, src_col: int, dst_row: int, dst_col: int) -> None:
+    """Clone the visual style from one cell to another."""
+    src = ws.cell(src_row, src_col)
+    dst = ws.cell(dst_row, dst_col)
+    if src.has_style:
+        dst._style = copy(src._style)  # type: ignore[attr-defined]
+    if src.number_format:
+        dst.number_format = src.number_format
+    if src.font:
+        dst.font = copy(src.font)
+    if src.fill:
+        dst.fill = copy(src.fill)
+    if src.border:
+        dst.border = copy(src.border)
+    if src.alignment:
+        dst.alignment = copy(src.alignment)
+    if src.protection:
+        dst.protection = copy(src.protection)
+
+
 def _clear_row_values(ws: Any, row: int, max_col: int) -> None:
     for col in range(1, max_col + 1):
         ws.cell(row, col).value = None
@@ -791,6 +811,19 @@ def _safe_number(value: Any) -> float:
 
 def _safe_text(value: Any) -> str:
     return "" if value in (None, "") else str(value)
+
+
+def _export_status_reason(item: dict[str, Any]) -> str:
+    """Render a human-readable non-quote status for the ECS template export."""
+    action = str(item.get("action") or item.get("Action") or "").strip()
+    reason = _safe_text(item.get("review_reason") or item.get("Review Reason"))
+    if action == "quote":
+        return ""
+    if action == "exclude_powered_off":
+        return reason or "Powered off - not quoted"
+    if action == "manual_review":
+        return reason or "Manual review required"
+    return reason or action.replace("_", " ").title()
 
 
 def _format_disk_label(value: Any) -> str:
@@ -1092,15 +1125,32 @@ def _build_summary_rows(
 
 
 def _populate_template_ecs_sheet(ws: Any, rows: list[dict[str, Any]]) -> None:
+    # Extend the Huawei Cloud section to column O for explicit non-quote status.
+    if "H1:N1" in {str(rng) for rng in ws.merged_cells.ranges}:
+        ws.unmerge_cells("H1:N1")
+    ws.merge_cells("H1:O1")
+    _copy_cell_style(ws, 1, 14, 1, 15)
+    _copy_cell_style(ws, 2, 14, 2, 15)
+    ws.cell(1, 7, None)
+    ws.cell(2, 7, None)
+    if "N" in ws.column_dimensions:
+        ws.column_dimensions["O"].width = ws.column_dimensions["N"].width
+    ws.cell(2, 15, "Status / Reason")
+    header_alignment = copy(ws.cell(2, 15).alignment)
+    header_alignment.horizontal = "left"
+    ws.cell(2, 15).alignment = header_alignment
+
     extra_rows = max(0, len(rows) - (ECS_TOTAL_ROW - ECS_DATA_START_ROW))
     if extra_rows:
         ws.insert_rows(ECS_TOTAL_ROW, extra_rows)
         for row_idx in range(ECS_TOTAL_ROW, ECS_TOTAL_ROW + extra_rows):
             _copy_row_style(ws, ECS_TEMPLATE_ROW, row_idx, 14)
+            _copy_cell_style(ws, row_idx, 14, row_idx, 15)
 
     total_row = ECS_TOTAL_ROW + extra_rows
     for row_idx in range(ECS_DATA_START_ROW, total_row):
-        _clear_row_values(ws, row_idx, 14)
+        _copy_cell_style(ws, row_idx, 14, row_idx, 15)
+        _clear_row_values(ws, row_idx, 15)
 
     for offset, item in enumerate(rows):
         row_idx = ECS_DATA_START_ROW + offset
@@ -1119,8 +1169,13 @@ def _populate_template_ecs_sheet(ws: Any, rows: list[dict[str, Any]]) -> None:
         storage_cell.number_format = "0.00"
         ws.cell(row_idx, 13, item.get("ECS On Demand /mes (USD)") if item.get("Action") == "quote" else None)
         ws.cell(row_idx, 14, item.get("ECS RI 1 año /mes (USD)") if item.get("Action") == "quote" else None)
+        ws.cell(row_idx, 15, _export_status_reason(item))
+        status_alignment = copy(ws.cell(row_idx, 15).alignment)
+        status_alignment.horizontal = "left"
+        ws.cell(row_idx, 15).alignment = status_alignment
 
-    _clear_row_values(ws, total_row, 14)
+    _copy_cell_style(ws, total_row, 14, total_row, 15)
+    _clear_row_values(ws, total_row, 15)
     ws.cell(total_row, 2, round(sum(_safe_number(item.get("CPUs")) for item in rows), 2))
     ws.cell(total_row, 3, round(sum(_safe_number(item.get("Memory GB")) for item in rows), 2))
     quoted = [item for item in rows if item.get("Action") == "quote"]

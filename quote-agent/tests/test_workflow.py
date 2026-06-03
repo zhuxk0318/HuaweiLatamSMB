@@ -4024,10 +4024,12 @@ def test_rvtools_export_ecs_sheet_headers():
     )
     result = _run_export_graph(content)
     ws = _load_export_workbook(result["workbook"].content)["ECS"]
-    assert _ecs_headers(ws)[:14] == [
+    assert _ecs_headers(ws)[:15] == [
         "Equipo", "CPU", "Mem", "Tipo", "HD", "S.O", None,
         "HC Flavor", "HC vCPU", "HC Memory", "Disk Type", "Storage(GB)", "PPU / Mes (USD)", "RI 1 Year (USD)",
+        "Status / Reason",
     ]
+    assert "H1:O1" in {str(rng) for rng in ws.merged_cells.ranges}
 
 
 def test_rvtools_export_ecs_sheet_has_quote_fields():
@@ -4210,9 +4212,28 @@ def test_rvtools_export_ecs_includes_non_quote_lines():
     assert "vm-oversized" in vm_names
 
     rows_by_name = {row[0]: row for row in rows}
-    # Col 12 = Storage(GB), col 13 = ECS On Demand
+    # Col 15 = Status / Reason, Col 12 = Storage(GB), Col 13 = ECS On Demand
+    assert rows_by_name["vm-off"][14] == "VM is not powered on in RVTools."
     assert rows_by_name["vm-off"][12] in ("", None)
     assert rows_by_name["vm-on"][12] not in ("", None)
+
+
+def test_rvtools_export_ecs_shows_manual_review_reason():
+    """ECS sheet should show why a non-quoted VM was not priced."""
+    content = make_rvtools_file(
+        info_rows=[
+            {"VM": "vm-missing-disk", "Powerstate": "PoweredOn", "CPUs": 2, "Memory": 4},
+        ],
+        disk_rows=[],
+    )
+    result = _run_export_graph(content)
+    ws = _load_export_workbook(result["workbook"].content)["ECS"]
+    rows = _ecs_data_rows(ws)
+    assert len(rows) == 1
+    assert rows[0][0] == "vm-missing-disk"
+    assert rows[0][14] == "No disk capacity found in vDisk."
+    assert rows[0][7] in ("", None)
+    assert rows[0][13] in ("", None)
 
 
 def test_rvtools_export_hwc_has_network_placeholder():
@@ -4617,10 +4638,43 @@ def test_rvtools_export_ecs_sheet_unchanged_by_phase4():
     result = _run_export_graph(content)
     ws = _load_export_workbook(result["workbook"].content)["ECS"]
     assert len(_ecs_data_rows(ws)) == 2
-    assert _ecs_headers(ws)[:14] == [
+    assert _ecs_headers(ws)[:15] == [
         "Equipo", "CPU", "Mem", "Tipo", "HD", "S.O", None,
         "HC Flavor", "HC vCPU", "HC Memory", "Disk Type", "Storage(GB)", "PPU / Mes (USD)", "RI 1 Year (USD)",
+        "Status / Reason",
     ]
+
+
+def test_rvtools_export_ecs_status_header_copies_row2_style():
+    """New O2 header should follow row-2 formatting but be left-aligned."""
+    content = make_rvtools_file(
+        info_rows=[{"VM": "vm-1", "Powerstate": "PoweredOn", "CPUs": 2, "Memory": 4}],
+        disk_rows=[{"VM": "vm-1", "Capacity GiB": 100}],
+    )
+    result = _run_export_graph(content)
+    ws = _load_export_workbook(result["workbook"].content, data_only=False)["ECS"]
+    assert ws["O2"].font.bold == ws["N2"].font.bold
+    assert ws["O2"].fill.fill_type == ws["N2"].fill.fill_type
+    assert ws["O2"].alignment.horizontal == "left"
+
+
+def test_rvtools_export_ecs_clears_g_column_and_left_aligns_o_status():
+    """G column should stay empty and O status cells should be left-aligned."""
+    content = make_rvtools_file(
+        info_rows=[
+            {"VM": "vm-off", "Powerstate": "PoweredOff", "CPUs": 2, "Memory": 4},
+        ],
+        disk_rows=[
+            {"VM": "vm-off", "Capacity GiB": 80},
+        ],
+    )
+    result = _run_export_graph(content)
+    ws = _load_export_workbook(result["workbook"].content, data_only=False)["ECS"]
+    assert ws["G1"].value in ("", None)
+    assert ws["G2"].value in ("", None)
+    assert ws["G3"].value in ("", None)
+    assert ws["O3"].value == "VM is not powered on in RVTools."
+    assert ws["O3"].alignment.horizontal == "left"
 
 
 def test_rvtools_export_hwc_preserves_template_columns():
