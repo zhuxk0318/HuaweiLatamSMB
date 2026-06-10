@@ -34,7 +34,7 @@ from app.main import (
     get_flexible_pricing_catalog,
 )
 from app.models import FlexibleQuoteContext, FlexibleReviewRequest, HumanFeedback, QuoteRequest, QuoteSummary, SheetSelection, SheetSelectionError, resolve_sheet_selection
-from app.pricebook import load_pricebook, pick_ecs_match
+from app.pricebook import load_pricebook, pick_ecs_match, _pick_ecs_by_family_policy, _pick_ecs_nearest_from_candidates, FAMILY_POLICY_TIERS
 from app.row_quote_workflow import RowMapping, RowCandidate, _collect_rows, _normalize_mapping_spec, _normalize_spec_alias, _fallback_mapping, _apply_product_priority, _apply_special_product_routing, _apply_hard_exclusions, _apply_composite_routing, _apply_product_priority_overrides, _enrich_composite_metadata, _price_evs, _price_catalog_product, _detect_composite_family, _detect_composite_part, annotate_row_quote_workbook
 from app.models import RowQuoteProgress
 from app.rvtools import RvToolsParseError, parse_rvtools_workbook
@@ -130,6 +130,82 @@ def make_merged_row_quote_workbook() -> bytes:
     ws.append(["", "", "Pod-CPU 4", 4, "mexico"])
     ws.append(["", "", "Pod-Memory 8", 8, "mexico"])
     ws.merge_cells("B2:B4")
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
+def make_billing_quote_workbook() -> bytes:
+    workbook = Workbook()
+    ws = workbook.active
+    ws.title = "azure Billing_invoice_transacti"
+    ws.append([f"Column{index}" for index in range(1, 20)])
+    ws.append(
+        [
+            "DATE (UTC)",
+            "SERVICE PERIOD (UTC)",
+            "TRANSACTION TYPE",
+            "PRODUCT FAMILY",
+            "PRODUCT TYPE",
+            "PRODUCT SKU",
+            "INVOICE SECTION",
+            "PAYG PRICE CURRENCY",
+            "PAYG PRICE",
+            "EFFECTIVE PRICE CURRENCY",
+            "EFFECTIVE PRICE",
+            "QUANTITY",
+            "UNIT TYPE",
+            "EXCHANGE RATE",
+            "CHARGES/CREDITS CURRENCY",
+            "CHARGES/CREDITS",
+            "AZURE CREDITS APPLIED CURRENCY",
+            "AZURE CREDITS APPLIED",
+        ]
+    )
+    ws.append(
+        [
+            "4/3/2026",
+            "3/1/2026 - 3/31/2026",
+            "Usage charges - Azure plan",
+            "Storage",
+            "Backup",
+            "Backup - Estándar - Sur de Brasil",
+            "Default invoice section",
+            "USD",
+            0.061,
+            "USD",
+            0.061,
+            244.647467,
+            "Datos almacenados GRS (GB/mes)",
+            1,
+            "USD",
+            14.92,
+            "USD",
+            0,
+        ]
+    )
+    ws.append(
+        [
+            "4/3/2026",
+            "3/1/2026 - 3/31/2026",
+            "Usage charges - Azure plan",
+            "Networking",
+            "VPN Gateway",
+            "VPN Gateway - VpnGw1",
+            "Default invoice section",
+            "USD",
+            0.19,
+            "USD",
+            0.19,
+            744,
+            "1 hora de la puerta de enlace",
+            1,
+            "USD",
+            141.36,
+            "USD",
+            0,
+        ]
+    )
     output = BytesIO()
     workbook.save(output)
     return output.getvalue()
@@ -452,6 +528,43 @@ def test_flexible_review_applies_feedback_and_unlocks_quote(monkeypatch: pytest.
     assert not reviewed.quote_blockers
     assert len(reviewed.quote_lines) == 1
     assert reviewed.quote_lines[0].monthly_price == 222.0
+
+
+def test_billing_preview_response_roundtrips_billing_state():
+    preview_state = {
+        "requirements": [],
+        "quote_context": {"region": "mexico", "language": "en", "customer_notes": "", "quote_mode": "cloud_billing"},
+        "matched_products": [],
+        "audit_log": [],
+        "billing_lines": [{"source_file": "azure.xlsx", "line_number": 5}],
+        "llm_aggregated_billing_items": [{"item_id": "billing-agg::azure.xlsx::0"}],
+        "mapped_billing_resources": [{"resource": "Azure VM"}],
+        "billing_gap_analysis": {"quoted": 1},
+        "billing_reconciliation": {"source_total": 100.0},
+        "final_billing_quote_items": [],
+    }
+
+    preview_payload = build_flexible_preview_response(preview_state)
+    request = FlexibleReviewRequest(
+        requirements=preview_payload.requirements,
+        quote_context=preview_payload.quote_context,
+        matched_products=preview_payload.matched_products,
+        audit_log=preview_payload.audit_log,
+        feedback=[],
+        billing_lines=preview_payload.billing_lines,
+        llm_aggregated_billing_items=preview_payload.llm_aggregated_billing_items,
+        mapped_billing_resources=preview_payload.mapped_billing_resources,
+        billing_gap_analysis=preview_payload.billing_gap_analysis,
+        billing_reconciliation=preview_payload.billing_reconciliation,
+        final_billing_quote_items=preview_payload.final_billing_quote_items,
+    )
+    rebuilt_state = build_flexible_review_state(request)
+
+    assert rebuilt_state["billing_lines"] == preview_state["billing_lines"]
+    assert rebuilt_state["llm_aggregated_billing_items"] == preview_state["llm_aggregated_billing_items"]
+    assert rebuilt_state["mapped_billing_resources"] == preview_state["mapped_billing_resources"]
+    assert rebuilt_state["billing_gap_analysis"] == preview_state["billing_gap_analysis"]
+    assert rebuilt_state["billing_reconciliation"] == preview_state["billing_reconciliation"]
 
 
 def test_flexible_export_api_returns_required_sheets(monkeypatch: pytest.MonkeyPatch):
@@ -1267,6 +1380,39 @@ from app.row_quote_tasks import (
 def _clear_tasks():
     with _lock:
         _tasks.clear()
+
+
+def test_billing_workbook_uses_flexible_template_through_annotation_task():
+    _clear_tasks()
+    created = create_annotation_task(
+        {"filename": "azure billing.xlsx", "content": make_billing_quote_workbook()},
+        {"region": "mexico", "language": "en", "customer_notes": "test"},
+    )
+    task_id = created.task_id
+
+    for _ in range(50):
+        time.sleep(0.1)
+        resp = get_annotation_task(task_id)
+        if resp.status in ("succeeded", "failed", "cancelled"):
+            break
+
+    assert resp.status == "succeeded"
+    assert resp.summary is not None
+    assert resp.summary.total_rows == 2
+    assert resp.summary.quoted_rows >= 1
+
+    workbook = get_annotation_workbook(task_id)
+    assert workbook.filename.startswith("billing-quote-mexico-")
+
+    exported = load_workbook(BytesIO(workbook.content), data_only=True)
+    # Phase 8E: Quotation sheet added as main customer-readable sheet
+    assert "Quotation" in exported.sheetnames
+    assert "ECS" in exported.sheetnames
+    assert "HWC" in exported.sheetnames
+    assert "Summary" in exported.sheetnames
+    assert "Información" in exported.sheetnames
+    assert "Standard Requirements" not in exported.sheetnames
+    _clear_tasks()
 
 
 def test_cancel_queued_or_running_task():
@@ -2918,15 +3064,13 @@ def test_rvtools_ecs_match_uses_nearest_cpu_mem_not_ceiling():
     # ceil: must be >= 8C/11G → medium.8c12g (smallest >=, since small.8c10g has mem=10 < 11)
     # nearest: small.8c10g score=|0|+|10-11|/11=0.091, medium.8c12g score=|0|+|12-11|/11=0.091
     #   same score → tie-breaker: small.8c10g undersizes (mem<11), medium.8c12g does not → medium wins
-    # But the key point: nearest considers small.8c10g (which ceil rejects), and if the
-    # gap were wider, nearest would pick it. Let's use 8C/10.5G instead:
-    #   small.8c10g: score = 0 + |10-10.5|/10.5 = 0.0476, undersizes=1
-    #   medium.8c12g: score = 0 + |12-10.5|/10.5 = 0.1429, undersizes=0
-    #   small.8c10g has lower score → wins even though it undersizes
+    # With undersize protection: medium.8c12g meets the request, small.8c10g does not → medium wins
     ceil_match = pick_ecs_match(catalog, 8, 11, strategy="ceil")
     near_match = pick_ecs_match(catalog, 8, 10.5, strategy="nearest")
     assert ceil_match["spec"] == "medium.8c12g", "Ceiling should pick smallest >= spec"
-    assert near_match["spec"] == "small.8c10g", "Nearest should pick closer spec even if slightly under"
+    # With undersize protection, meeting candidates always win over undersized.
+    # medium.8c12g (8>=8, 12>=10.5) meets the request; small.8c10g (10<10.5) does not.
+    assert near_match["spec"] == "medium.8c12g", "Nearest with undersize protection prefers meeting candidate"
 
 
 def test_pick_ecs_match_nearest_can_select_lower_when_closer():
@@ -2953,9 +3097,10 @@ def test_pick_ecs_match_nearest_can_select_lower_when_closer():
     # Request 3 vCPU / 5 GiB
     # s2c4g: cpu_ratio=1/3=0.333, mem_ratio=1/5=0.2, score=0.533, undersizes=1
     # s4c8g: cpu_ratio=1/3=0.333, mem_ratio=3/5=0.6, score=0.933, undersizes=0
-    # s2c4g has lower score → wins even though it undersizes
+    # With undersize protection: s4c8g meets the request (4>=3, 8>=5),
+    # s2c4g does not (2<3, 4<5). Meeting candidate always wins over undersized.
     match = pick_ecs_match(catalog, 3, 5, strategy="nearest")
-    assert match["spec"] == "s2c4g", "Lower score wins even when undersizing"
+    assert match["spec"] == "s4c8g", "Meeting candidate wins over undersized, even with higher score"
 
 
 def test_pick_ecs_match_nearest_tiebreaker_prefers_lower_price():
@@ -4985,6 +5130,180 @@ def test_pick_ecs_match_sap_app_falls_back_to_c_when_no_s_match():
     if ceil_match is not None:
         # ceil should fall back to C-series since no S-series spec has 48 vCPU
         assert ceil_match["category"] in ("General Computing-plus", "General Computing", "Memory-optimized")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 8B.1: ECS undersize protection — family-policy tier fallback tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _ecs(spec: str, vcpu: int, mem_gib: int, category: str, family: str = "x0",
+         hourly_usd: float = 0.10, ri_monthly: float = 50.0) -> dict:
+    """Shorthand to build a single ECS item for tests."""
+    return {
+        "spec": spec, "vcpu": vcpu, "memoryGiB": mem_gib, "category": category,
+        "familyLabel": family, "generation": "", "hourlyUsd": hourly_usd,
+        "monthlyUsd": hourly_usd * 730, "ri1YearMonthlyUsd": ri_monthly,
+        "resourceSpecCode": "", "image": "Linux", "imageSpec": "linux",
+        "ondemandProductId": "", "riProductId": "", "riPlanId": "",
+    }
+
+
+def test_pick_ecs_match_sap_app_does_not_return_undersized_s_when_c_can_meet():
+    """sap_app: if S-series only has undersized specs but C-series has a meeting
+    spec, the meeting C-series spec should be selected, not the undersized S-series."""
+    catalog = _make_region_catalog([
+        # S-series: max 8 vCPU / 32 GiB — too small for 16/64 request
+        _ecs("s7n.2xlarge", 8, 32, "SAP-certified", "S7n", hourly_usd=0.20),
+        # C-series: has 16/64 which meets the request
+        _ecs("c7n.4xlarge", 16, 64, "General Computing-plus", "C7n", hourly_usd=0.30),
+        # X-series: also has a meeting spec but is lower priority
+        _ecs("x0.4xlarge", 16, 64, "General Computing", "x0", hourly_usd=0.25),
+    ])
+    match = pick_ecs_match(catalog, 16, 64, strategy="nearest", family_policy="sap_app")
+    assert match is not None
+    # Must NOT return the undersized S-series
+    assert match["category"] != "SAP-certified", (
+        f"sap_app should not return undersized S-series, got {match['spec']}"
+    )
+    # Must return a spec that meets the request
+    assert int(match["vcpu"]) >= 16 and float(match["memoryGiB"]) >= 64
+
+
+def test_pick_ecs_match_sap_db_prefers_m_if_c_is_undersized():
+    """sap_db: if C-series nearest is undersized (e.g. 16/64 for a 16/128 request)
+    but M-series has a meeting spec (16/128), M should be selected."""
+    catalog = _make_region_catalog([
+        # C-series: 16/64 is undersized for 16/128
+        _ecs("c7n.4xlarge", 16, 64, "General Computing-plus", "C7n", hourly_usd=0.30),
+        # M-series: 16/128 meets the request
+        _ecs("m7n.4xlarge", 16, 128, "Memory-optimized", "M7n", hourly_usd=0.40),
+        # S-series: also undersized
+        _ecs("s7n.4xlarge", 16, 64, "SAP-certified", "S7n", hourly_usd=0.35),
+    ])
+    match = pick_ecs_match(catalog, 16, 128, strategy="nearest", family_policy="sap_db")
+    assert match is not None
+    # Must return M-series that meets the request
+    assert match["category"] == "Memory-optimized", (
+        f"sap_db should fall through to M-series, got {match['category']}"
+    )
+    assert float(match["memoryGiB"]) >= 128
+
+
+def test_pick_ecs_match_hana_uses_m_that_meets_request():
+    """sap_hana_db: M-series should be preferred and must meet the request,
+    not return an undersized S-series spec."""
+    catalog = _make_region_catalog([
+        # M-series: 8/64 meets request
+        _ecs("m7n.2xlarge", 8, 64, "Memory-optimized", "M7n", hourly_usd=0.25),
+        # S-series: 8/32 is undersized
+        _ecs("s7n.2xlarge", 8, 32, "SAP-certified", "S7n", hourly_usd=0.15),
+        # C-series: 8/32 also undersized
+        _ecs("c7n.2xlarge", 8, 32, "General Computing-plus", "C7n", hourly_usd=0.20),
+    ])
+    match = pick_ecs_match(catalog, 8, 64, strategy="nearest", family_policy="sap_hana_db")
+    assert match is not None
+    assert match["category"] == "Memory-optimized", (
+        f"sap_hana_db should pick M-series, got {match['category']}"
+    )
+    assert float(match["memoryGiB"]) >= 64
+
+
+def test_pick_ecs_match_only_undersizes_when_no_family_can_meet():
+    """Undersized fallback is allowed only when no tier has a meeting candidate."""
+    catalog = _make_region_catalog([
+        # All specs are smaller than the 64/512 request
+        _ecs("m7n.8xlarge", 32, 256, "Memory-optimized", "M7n", hourly_usd=0.80),
+        _ecs("c7n.8xlarge", 32, 128, "General Computing-plus", "C7n", hourly_usd=0.60),
+        _ecs("s7n.8xlarge", 32, 128, "SAP-certified", "S7n", hourly_usd=0.55),
+        _ecs("x0.8xlarge", 32, 128, "General Computing", "x0", hourly_usd=0.50),
+    ])
+    match = pick_ecs_match(catalog, 64, 512, strategy="nearest", family_policy="sap_hana_db")
+    assert match is not None, "Should still return a match via undersized fallback"
+    # The returned spec will be undersized — that's expected and acceptable
+    assert int(match["vcpu"]) < 64 or float(match["memoryGiB"]) < 512
+
+
+def test_pick_ecs_match_meeting_candidate_never_undersizes():
+    """When a meeting candidate exists in any tier, the result must meet the request."""
+    catalog = _make_region_catalog([
+        _ecs("small.4c8g", 4, 8, "General Computing", "x0", hourly_usd=0.05),
+        _ecs("medium.8c32g", 8, 32, "General Computing-plus", "C7n", hourly_usd=0.15),
+        _ecs("large.8c64g", 8, 64, "Memory-optimized", "M7n", hourly_usd=0.25),
+    ])
+    # Request 8/32 — C-series has a meeting spec
+    match = pick_ecs_match(catalog, 8, 32, strategy="nearest", family_policy="default")
+    assert match is not None
+    assert int(match["vcpu"]) >= 8, "Should not undersize vCPU when meeting candidate exists"
+    assert float(match["memoryGiB"]) >= 32, "Should not undersize memory when meeting candidate exists"
+
+
+def test_pick_ecs_by_family_policy_all_tiers_checked():
+    """_pick_ecs_by_family_policy should check all tiers before fallback."""
+    ecs_items = [
+        _ecs("s.4c16g", 4, 16, "SAP-certified", "S7n"),
+        _ecs("c.4c8g", 4, 8, "General Computing-plus", "C7n"),
+        _ecs("m.4c32g", 4, 32, "Memory-optimized", "M7n"),
+    ]
+    # Request 4/32 — S and C don't meet, M does
+    result = _pick_ecs_by_family_policy(
+        ecs_items, 4, 32, FAMILY_POLICY_TIERS["sap_app"]
+    )
+    assert result is not None
+    assert result["category"] == "Memory-optimized"
+
+
+def test_pick_ecs_nearest_from_candidates_empty_returns_none():
+    """_pick_ecs_nearest_from_candidates returns None for empty list."""
+    assert _pick_ecs_nearest_from_candidates([], 4, 16) is None
+
+
+def test_default_policy_behavior_still_reasonable():
+    """Default policy should still produce reasonable results after the fix.
+    A general workload should not get a wildly oversized spec."""
+    load_pricebook.cache_clear()
+    pb = load_pricebook()
+    mexico = pb["pricingCatalog"]["mexico"]
+    # Small request: 2 vCPU / 4 GiB
+    match = pick_ecs_match(mexico, 2, 4, strategy="nearest", family_policy="default")
+    assert match is not None
+    # Should not return a spec with >8x the requested vCPU
+    assert int(match["vcpu"]) <= 16, (
+        f"Default policy should not wildly oversize, got {match['vcpu']} vCPU for 2 vCPU request"
+    )
+
+
+def test_quote_inventory_ecs_mem_not_less_than_request_when_meeting_candidate_exists():
+    """End-to-end: quote_inventory should not produce HC Memory < requested memory
+    when a meeting candidate exists in the pricebook."""
+    load_pricebook.cache_clear()
+    pb = load_pricebook()
+    mexico = pb["pricingCatalog"]["mexico"]
+
+    # Find a SAP-certified spec and a larger C/M spec to ensure the scenario works
+    sap_specs = [e for e in mexico["ecs"] if e["category"] == "SAP-certified"]
+    compute_specs = [e for e in mexico["ecs"] if e["category"] == "General Computing-plus"]
+    if not sap_specs or not compute_specs:
+        pytest.skip("Catalog doesn't have both SAP-certified and Computing-plus specs")
+
+    # Pick a request that a C-series spec can meet but S-series cannot
+    # Use a medium C-series spec as the target
+    c_target = compute_specs[len(compute_specs) // 2]
+    req_vcpu = int(c_target["vcpu"])
+    req_mem = float(c_target["memoryGiB"])
+
+    # Make sure at least one C-series spec meets this request
+    meeting_c = [s for s in compute_specs
+                 if int(s["vcpu"]) >= req_vcpu and float(s["memoryGiB"]) >= req_mem]
+    if not meeting_c:
+        pytest.skip("No C-series meeting candidate for the chosen request")
+
+    match = pick_ecs_match(mexico, req_vcpu, req_mem, strategy="nearest", family_policy="sap_app")
+    assert match is not None
+    assert float(match["memoryGiB"]) >= req_mem, (
+        f"HC Memory ({match['memoryGiB']}) should be >= requested ({req_mem}) "
+        f"when meeting candidate exists"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -313,10 +313,12 @@ class TestStateIntegration:
         result = extract_requirement_items(state)
         assert "mapped_billing_resources" in result
         assert "billing_lines" in result
+        assert "billing_groups" in result
+        assert "llm_aggregated_billing_items" in result
         assert "standardized_billing_resources" in result
         assert len(result["mapped_billing_resources"]) > 0
         assert len(result["requirements"]) > 0
-        # The requirement should have normalized_product = ECS
+        # The requirement should have normalized_product = ECS (from aggregation path)
         req = result["requirements"][0]
         assert req["normalized_product"] == "ECS"
 

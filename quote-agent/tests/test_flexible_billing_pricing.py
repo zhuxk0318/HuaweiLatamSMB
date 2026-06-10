@@ -582,3 +582,417 @@ class TestRealAzureFilePricing:
         # Basic assertions
         assert len(quote_lines) > 0, "Should have at least some quoted lines"
         assert total_price > 0, "Total price should be positive"
+
+
+# ---------------------------------------------------------------------------
+# Billing price semantics tests (Phase Next)
+# ---------------------------------------------------------------------------
+
+from app.flexible_workflow import (
+    _billing_requirement_price_semantic,
+    _billing_can_price_requirement,
+    _billing_price_semantics,
+    _billing_quantity_for_component,
+    _billing_units_compatible,
+)
+
+
+def _make_billing_requirement(overrides: dict | None = None) -> RequirementItem:
+    """Build a billing RequirementItem for semantics testing."""
+    base = RequirementItem(
+        item_id="billing-agg::test.csv::0",
+        source_file="test.csv",
+        source_sheet="csv",
+        row_number=2,
+        raw_product_name="ECS | D8 v3",
+        quantity=6.0,
+        quantity_source="billing_standardized",
+        unit="instance hours",
+        region="chile",
+        normalized_product="ECS",
+        spec=ComputeSpec(sku="D8 v3").model_dump(),
+        notes="vendor=azure",
+    )
+    if overrides:
+        base = base.model_copy(update=overrides)
+    return base
+
+
+def _make_component(product: str, unit: str, sku: str | None = None, price: float = 100.0) -> PriceComponent:
+    """Build a minimal confirmed PriceComponent for testing."""
+    return PriceComponent(
+        product=product,
+        region="chile",
+        sku=sku,
+        family=None,
+        tier=None,
+        billing_mode="monthly",
+        unit=unit,
+        price=price,
+        currency="USD",
+        source_url="https://test",
+        captured_at="2026-01-01",
+        confirmed=True,
+        status="confirmed",
+    )
+
+
+# 1. test_mysql_storage_gib_month_does_not_price_as_rds_instance_month
+
+class TestRdsStorageSemantics:
+    def test_mysql_storage_gib_month_does_not_price_as_rds_instance_month(self):
+        """MySQL storage GB/month must NOT be priced against RDS instance-month catalog."""
+        req = _make_billing_requirement({
+            "normalized_product": "RDS",
+            "unit": "capacity gib month",
+            "raw_product_name": "RDS | MySQL Storage",
+            "spec": GenericSpec(sku="MySQL Storage", description="MySQL Flexible Server Storage").model_dump(),
+            "quantity": 100.0,
+        })
+        comp = _make_component("RDS", "instance-month", "mysql.s2.medium")
+        can_price, reason = _billing_can_price_requirement(req, comp)
+        assert can_price is False
+        assert "Storage capacity" in reason or "cannot be priced" in reason
+
+    def test_mysql_paid_io_does_not_price_as_rds_instance_month(self):
+        """MySQL paid IO operations must NOT be priced against RDS instance-month catalog."""
+        req = _make_billing_requirement({
+            "normalized_product": "RDS",
+            "unit": "ops 10k",
+            "raw_product_name": "RDS | MySQL IO",
+            "spec": GenericSpec(sku="MySQL IO", description="MySQL Paid IO").model_dump(),
+            "quantity": 500.0,
+        })
+        comp = _make_component("RDS", "instance-month", "mysql.s2.medium")
+        can_price, reason = _billing_can_price_requirement(req, comp)
+        assert can_price is False
+        assert "Request/operation" in reason or "cannot be priced" in reason
+
+    def test_mysql_requests_million_does_not_price_as_rds_instance_month(self):
+        """MySQL requests-per-million must NOT be priced against RDS instance-month."""
+        req = _make_billing_requirement({
+            "normalized_product": "RDS",
+            "unit": "requests million",
+            "raw_product_name": "RDS | MySQL Requests",
+            "quantity": 62.78,
+        })
+        comp = _make_component("RDS", "instance-month", "mysql.s2.medium")
+        can_price, reason = _billing_can_price_requirement(req, comp)
+        assert can_price is False
+
+    def test_mysql_compute_instance_hours_can_price_as_rds_instance_month(self):
+        """MySQL compute instance-hours CAN be priced against RDS instance-month."""
+        req = _make_billing_requirement({
+            "normalized_product": "RDS",
+            "unit": "instance hours",
+            "raw_product_name": "RDS | MySQL Compute",
+            "spec": GenericSpec(sku="MySQL Flexible Server - 1 vCore", description="MySQL Compute").model_dump(),
+            "quantity": 1.0,
+        })
+        comp = _make_component("RDS", "instance-month", "mysql.s2.medium")
+        can_price, _ = _billing_can_price_requirement(req, comp)
+        assert can_price is True
+
+
+# 2. test_private_link_traffic_does_not_price_as_vpn_month
+
+class TestVpnTrafficSemantics:
+    def test_private_link_traffic_does_not_price_as_vpn_month(self):
+        """Private Link traffic GB must NOT be priced against VPN connection-month."""
+        req = _make_billing_requirement({
+            "normalized_product": "VPN",
+            "unit": "traffic gb",
+            "raw_product_name": "VPN | Private Link Traffic",
+            "quantity": 8664.41,
+        })
+        comp = _make_component("VPN", "connection-month", "vpn-basic")
+        can_price, reason = _billing_can_price_requirement(req, comp)
+        assert can_price is False
+        assert "Traffic" in reason
+
+    def test_vpn_gateway_hours_can_quote_as_gateway_month(self):
+        """VPN Gateway hours CAN be priced against VPN gateway-month."""
+        req = _make_billing_requirement({
+            "normalized_product": "VPN",
+            "unit": "instance hours",
+            "raw_product_name": "VPN | VpnGw1",
+            "quantity": 1.0,
+        })
+        comp = _make_component("VPN", "gateway-month", "vpn-basic")
+        can_price, _ = _billing_can_price_requirement(req, comp)
+        assert can_price is True
+
+
+# 3. test_defender_storage_transactions_do_not_price_as_waf_month
+
+class TestHssOpsSemantics:
+    def test_defender_storage_transactions_do_not_price_as_hss_month(self):
+        """Defender storage operations must NOT be priced against HSS server-month."""
+        req = _make_billing_requirement({
+            "normalized_product": "HSS",
+            "unit": "ops 10k",
+            "raw_product_name": "HSS | Defender Storage Ops",
+            "quantity": 6063.54,
+        })
+        comp = _make_component("HSS", "server-month", "hss-basic")
+        can_price, reason = _billing_can_price_requirement(req, comp)
+        assert can_price is False
+        assert "Request/operation" in reason or "cannot be priced" in reason
+
+    def test_hss_node_hours_can_quote_as_server_month(self):
+        """HSS node hours CAN be priced against HSS server-month."""
+        req = _make_billing_requirement({
+            "normalized_product": "HSS",
+            "unit": "instance hours",
+            "raw_product_name": "HSS | Defender P2",
+            "quantity": 15.01,
+        })
+        comp = _make_component("HSS", "server-month", "hss-basic")
+        can_price, _ = _billing_can_price_requirement(req, comp)
+        assert can_price is True
+
+
+# 4. test_backup_storage_gib_month_does_not_price_as_cbr_protected_server_month
+
+class TestCbrStorageSemantics:
+    def test_backup_storage_gib_month_does_not_price_as_cbr_protected_server_month(self):
+        """Backup storage GB/month must NOT be priced against CBR protected-server-month."""
+        req = _make_billing_requirement({
+            "normalized_product": "CBR",
+            "unit": "capacity gib month",
+            "raw_product_name": "CBR | Backup Storage",
+            "quantity": 244.65,
+        })
+        comp = _make_component("CBR", "protected-server-month", "cbr-basic")
+        can_price, reason = _billing_can_price_requirement(req, comp)
+        assert can_price is False
+        assert "Storage capacity" in reason or "cannot be priced" in reason
+
+
+# 5. test_obs_capacity_usage_can_still_quote
+
+class TestObsCapacitySemantics:
+    def test_obs_capacity_usage_can_still_quote(self):
+        """OBS capacity GB/month CAN be priced against OBS GB-month catalog."""
+        req = _make_billing_requirement({
+            "normalized_product": "OBS",
+            "unit": "capacity gib month",
+            "raw_product_name": "OBS | Blob Storage",
+            "quantity": 572.75,
+        })
+        comp = _make_component("OBS", "GB-month", "obs-standard")
+        can_price, _ = _billing_can_price_requirement(req, comp)
+        assert can_price is True
+
+    def test_obs_ops_10k_does_not_price_as_obs_gb_month(self):
+        """OBS operations must NOT be priced against OBS GB-month catalog."""
+        req = _make_billing_requirement({
+            "normalized_product": "OBS",
+            "unit": "ops 10k",
+            "raw_product_name": "OBS | Blob Ops",
+            "quantity": 17.87,
+        })
+        comp = _make_component("OBS", "GB-month", "obs-standard")
+        can_price, reason = _billing_can_price_requirement(req, comp)
+        assert can_price is False
+        assert "Request/operation" in reason
+
+
+# 6. test_sfs_capacity_usage_can_still_quote
+
+class TestSfsCapacitySemantics:
+    def test_sfs_capacity_usage_can_still_quote(self):
+        """SFS Turbo capacity GB/month CAN be priced against SFS Turbo GB-month catalog."""
+        req = _make_billing_requirement({
+            "normalized_product": "SFS Turbo",
+            "unit": "capacity gib month",
+            "raw_product_name": "SFS Turbo | File Storage",
+            "quantity": 162.97,
+        })
+        comp = _make_component("SFS Turbo", "GB-month", "sfs-turbo-standard")
+        can_price, _ = _billing_can_price_requirement(req, comp)
+        assert can_price is True
+
+    def test_sfs_ops_10k_does_not_price_as_sfs_gb_month(self):
+        """SFS Turbo operations must NOT be priced against SFS Turbo GB-month catalog."""
+        req = _make_billing_requirement({
+            "normalized_product": "SFS Turbo",
+            "unit": "ops 10k",
+            "raw_product_name": "SFS Turbo | File Ops",
+            "quantity": 267.56,
+        })
+        comp = _make_component("SFS Turbo", "GB-month", "sfs-turbo-standard")
+        can_price, reason = _billing_can_price_requirement(req, comp)
+        assert can_price is False
+
+
+# 7. test_elb_traffic_does_not_price_as_elb_instance_month
+
+class TestElbTrafficSemantics:
+    def test_elb_traffic_gb_does_not_price_as_elb_instance_month(self):
+        """ELB traffic GB must NOT be priced against ELB instance-month catalog."""
+        req = _make_billing_requirement({
+            "normalized_product": "ELB",
+            "unit": "traffic gb",
+            "raw_product_name": "ELB | Load Balancer Traffic",
+            "quantity": 1833.72,
+        })
+        comp = _make_component("ELB", "instance-month", "elb-shared")
+        can_price, reason = _billing_can_price_requirement(req, comp)
+        assert can_price is False
+        assert "Traffic" in reason
+
+    def test_elb_instance_hours_can_price(self):
+        """ELB instance hours CAN be priced against ELB instance-month catalog."""
+        req = _make_billing_requirement({
+            "normalized_product": "ELB",
+            "unit": "instance hours",
+            "raw_product_name": "ELB | Application Gateway",
+            "quantity": 33.0,
+        })
+        comp = _make_component("ELB", "instance-month", "elb-shared")
+        can_price, _ = _billing_can_price_requirement(req, comp)
+        assert can_price is True
+
+
+# 8. test_evs_instance_hours_does_not_price_as_evs_gb_month
+
+class TestEvsSemantics:
+    def test_evs_instance_hours_does_not_price_as_evs_gb_month(self):
+        """EVS with instance-hours unit (misclassified) must NOT be priced against EVS GB-month."""
+        req = _make_billing_requirement({
+            "normalized_product": "EVS",
+            "unit": "instance hours",
+            "raw_product_name": "EVS | Managed Disk",
+            "quantity": 0.01,
+        })
+        comp = _make_component("EVS", "GB-month", "high-io")
+        can_price, reason = _billing_can_price_requirement(req, comp)
+        assert can_price is False
+
+    def test_evs_capacity_gib_month_can_price(self):
+        """EVS capacity GB/month CAN be priced against EVS GB-month catalog."""
+        req = _make_billing_requirement({
+            "normalized_product": "EVS",
+            "unit": "capacity gib month",
+            "raw_product_name": "EVS | Managed Disk",
+            "quantity": 38.23,
+        })
+        comp = _make_component("EVS", "GB-month", "high-io")
+        can_price, _ = _billing_can_price_requirement(req, comp)
+        assert can_price is True
+
+
+# 9. test_real_billing_total_is_no_longer_massively_overstated
+
+class TestRealAzureNoOverstatement:
+    def test_real_billing_total_is_no_longer_massively_overstated(
+        self, azure_document: dict, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Real Azure file: total quoted price must be reasonable (not 1M+)."""
+        monkeypatch.delenv("HUAWEI_MAAS_API_KEY", raising=False)
+
+        from app.flexible_workflow import (
+            _extract_billing_lines, _group_billing_lines,
+            _aggregate_billing_groups_fallback,
+            _build_requirements_from_llm_aggregated_billing_items,
+        )
+
+        lines = _extract_billing_lines(azure_document)
+        groups = _group_billing_lines(lines)
+        agg_items = _aggregate_billing_groups_fallback(groups)
+        requirements = _build_requirements_from_llm_aggregated_billing_items(agg_items)
+
+        norm_state = {"requirements": requirements, "quote_context": {"region": "chile"}, "audit_log": [], "progress_callback": None}
+        norm_result = normalize_requirements(norm_state)
+
+        catalog = [item.model_dump() for item in query_flexible_pricing_catalog(region="chile")]
+        val_state = {"requirements": norm_result["requirements"], "quote_context": {"region": "chile"}, "price_catalog": catalog, "matched_products": [], "understanding": {"profile": {}}, "audit_log": [], "progress_callback": None}
+        val_result = validate_quote_readiness(val_state)
+
+        res_state = {"quote_ready_items": val_result["quote_ready_items"], "price_catalog": catalog, "unquoted_items": val_result["unquoted_items"], "audit_log": [], "progress_callback": None}
+        res_result = resolve_price_components(res_state)
+
+        quote_state = {"quote_ready_items": val_result["quote_ready_items"], "price_components": res_result["price_components"], "audit_log": [], "progress_callback": None}
+        quote_result = quote_items(quote_state)
+
+        sum_state = {"requirements": norm_result["requirements"], "quote_ready_items": val_result["quote_ready_items"], "quote_lines": quote_result["quote_lines"], "quote_blockers": val_result["quote_blockers"], "unquoted_items": res_result["unquoted_items"], "quote_context": {"region": "chile"}, "audit_log": [], "progress_callback": None}
+        sum_result = summarize_quote(sum_state)
+        total_price = sum_result["summary"]["total_monthly_price"]
+
+        # Must not be massively overstated (no 1M+ prices)
+        assert total_price < 100000, f"Total price ${total_price:,.2f} is suspiciously high"
+        # Must have some quoted lines (not all blocked)
+        assert len(quote_result["quote_lines"]) > 0, "Should have at least some quoted lines"
+        # Must have some unquoted items (usage lines)
+        assert len(res_result["unquoted_items"]) > 0, "Should have unquoted usage items"
+
+
+# 10. test_summary_mentions_usage_based_unquoted_items
+
+class TestSummaryUsageMention:
+    def test_summary_mentions_usage_based_unquoted_items(self):
+        """Summary should mention usage-based unquoted items when present."""
+        billing_req = _make_billing_requirement({
+            "region": "chile",
+            "normalized_product": "RDS",
+            "unit": "ops 10k",
+        })
+        state = {
+            "requirements": [billing_req.model_dump()],
+            "quote_ready_items": [],
+            "quote_lines": [],
+            "quote_blockers": [],
+            "unquoted_items": [billing_req.model_copy(update={"status": "needs_price_confirmation", "status_reason": "Request/operation usage cannot be priced"}).model_dump()],
+            "audit_log": [],
+            "progress_callback": None,
+            "quote_context": {"region": "chile"},
+        }
+        result = summarize_quote(state)
+        summary = result["summary"]
+        assumptions = summary.get("assumptions", [])
+        # Should mention usage-based unquoted
+        usage_assumptions = [a for a in assumptions if "usage" in a.lower() and "unquoted" in a.lower()]
+        assert len(usage_assumptions) > 0, f"Expected usage-based assumption, got: {assumptions}"
+
+
+# 11. test_billing_requirement_price_semantic_classifications
+
+class TestSemanticClassification:
+    def test_instance_hours_ecs_is_instance_month(self):
+        req = _make_billing_requirement({"normalized_product": "ECS", "unit": "instance hours"})
+        assert _billing_requirement_price_semantic(req) == "instance_month"
+
+    def test_capacity_gib_month_evs_is_capacity_month(self):
+        req = _make_billing_requirement({"normalized_product": "EVS", "unit": "capacity gib month"})
+        assert _billing_requirement_price_semantic(req) == "capacity_month"
+
+    def test_traffic_gb_is_traffic_usage(self):
+        req = _make_billing_requirement({"normalized_product": "ELB", "unit": "traffic gb"})
+        assert _billing_requirement_price_semantic(req) == "traffic_usage"
+
+    def test_ops_10k_is_request_usage(self):
+        req = _make_billing_requirement({"normalized_product": "OBS", "unit": "ops 10k"})
+        assert _billing_requirement_price_semantic(req) == "request_usage"
+
+    def test_unknown_unit_is_unknown(self):
+        req = _make_billing_requirement({"normalized_product": "EVS", "unit": "unknown"})
+        assert _billing_requirement_price_semantic(req) == "unknown"
+
+    def test_instance_hours_vpn_is_gateway_month(self):
+        req = _make_billing_requirement({"normalized_product": "VPN", "unit": "instance hours"})
+        assert _billing_requirement_price_semantic(req) == "gateway_month"
+
+    def test_instance_hours_hss_is_protected_resource_month(self):
+        req = _make_billing_requirement({"normalized_product": "HSS", "unit": "instance hours"})
+        assert _billing_requirement_price_semantic(req) == "protected_resource_month"
+
+    def test_instance_hours_evs_is_unknown(self):
+        """EVS with instance-hours is likely misclassified — should be unknown."""
+        req = _make_billing_requirement({"normalized_product": "EVS", "unit": "instance hours"})
+        assert _billing_requirement_price_semantic(req) == "unknown"
+
+    def test_capacity_gib_month_rds_is_capacity_month(self):
+        """RDS storage capacity is capacity_month semantic (but won't match RDS instance-month catalog)."""
+        req = _make_billing_requirement({"normalized_product": "RDS", "unit": "capacity gib month"})
+        assert _billing_requirement_price_semantic(req) == "capacity_month"

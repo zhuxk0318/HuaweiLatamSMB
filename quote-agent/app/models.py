@@ -109,6 +109,7 @@ FlexibleRequirementStatus = Literal[
     "needs_region",
     "needs_manual_review",
     "needs_price_confirmation",
+    "excluded_by_manual_review",
 ]
 FlexiblePriceStatus = Literal["confirmed", "capture_error", "pending_confirmation"]
 FlexibleQuotePurpose = Literal["purchase_quote", "unit_price_comparison", "migration_estimate", "unknown"]
@@ -208,6 +209,7 @@ class FlexibleQuoteContext(BaseModel):
     region: RegionKey | None = None
     language: LangKey = "en"
     customer_notes: str = ""
+    quote_mode: Literal["cloud_billing", "others"] | None = None
 
 
 class ComputeSpec(BaseModel):
@@ -300,6 +302,97 @@ class FlexibleQuoteLine(BaseModel):
     assumption: str | None = None
 
 
+# --- Cloud Billing Final Quotation models (Phase 8A) ---
+
+FinalQuoteItemStatus = Literal["quoted", "partial", "manual_review", "unquoted"]
+
+CloudBillingResourceKind = Literal[
+    "compute_vm",
+    "block_storage",
+    "shared_file_storage",
+    "object_storage",
+    "managed_database",
+    "load_balancing_and_waf",
+    "vpn_connectivity",
+    "public_ip_or_bandwidth",
+    "backup_security_ops",
+    "platform_paas_misc",
+]
+
+
+class CloudBillingFinalQuoteItem(BaseModel):
+    """A single customer-readable final quotation line item.
+
+    This is the third layer in the Cloud Billing Quote pipeline:
+      1. Raw billing lines
+      2. Aggregated billing items (llm_aggregated_billing_items / quote_lines)
+      3. Final quotation items  ← this model
+
+    Each final item may compose multiple internal items into one
+    business-level quotation entry (e.g. 6 × same-spec VMs → 1 line).
+    """
+
+    item_id: str
+    vendor: str
+    resource_kind: CloudBillingResourceKind
+    # ── Source cloud fields ──
+    source_service_family: str | None = None
+    source_service_name: str
+    source_config_summary: str | None = None
+    source_quantity: float | None = None
+    source_pricing_basis: str | None = None
+    source_monthly_total_usd: float | None = None
+    # ── Huawei Cloud target fields ──
+    huawei_product: str | None = None
+    huawei_spec_summary: str | None = None
+    huawei_quantity: float | None = None
+    huawei_unit_price_usd: float | None = None
+    huawei_billing_basis: str | None = None
+    huawei_monthly_total_usd: float | None = None
+    # ── Status & traceability ──
+    status: FinalQuoteItemStatus = "unquoted"
+    composition_notes: list[str] = Field(default_factory=list)
+    source_item_ids: list[str] = Field(default_factory=list)
+    manual_review_reason: str | None = None
+
+
+# --- LLM Final Composition Candidate (Phase 10A) ---
+
+class CloudBillingFinalCompositionCandidate(BaseModel):
+    """An LLM-proposed final quotation item — NOT yet validated or priced.
+
+    This is the output of the LLM-driven final composition step.
+    It must be validated and enriched by deterministic logic before
+    becoming a CloudBillingFinalQuoteItem.
+
+    Key invariants:
+    - Prices are NOT trusted from the LLM; they are backfilled from quote_lines.
+    - huawei_product is a hint, not authoritative; must be validated against catalog.
+    - component_refs must point to real aggregated billing item IDs.
+    """
+    candidate_id: str
+    vendor: str
+    resource_kind: CloudBillingResourceKind | str
+    # ── Source cloud fields (LLM-composed) ──
+    source_service_name: str
+    source_config_summary: str | None = None
+    source_quantity: float | None = None
+    source_billing_basis: str | None = None
+    source_monthly_total_usd: float | None = None
+    # ── Huawei Cloud target hints (LLM-suggested, not authoritative) ──
+    huawei_product: str | None = None
+    huawei_spec_hint: str | None = None
+    huawei_quantity: float | None = None
+    huawei_billing_basis: str | None = None
+    # ── Status & traceability ──
+    status: FinalQuoteItemStatus = "unquoted"
+    manual_review_reason: str | None = None
+    composition_notes: list[str] = Field(default_factory=list)
+    component_refs: list[str] = Field(default_factory=list)
+    # ── LLM confidence ──
+    confidence: float | None = None
+
+
 class FlexibleQuoteSummary(BaseModel):
     total_input_items: int = 0
     quote_ready_items: int = 0
@@ -379,6 +472,70 @@ class FlexibleQuoteDiagnostics(BaseModel):
     message: str | None = None
 
 
+class ManualReviewCandidate(BaseModel):
+    """A single manual review candidate exposed in preview responses."""
+    candidate_id: str
+    source_label: str
+    source_product_type: str = ""
+    source_product_sku: str = ""
+    source_amount: float = 0
+    source_quantity: float = 1
+    source_unit: str = "1"
+    blocker_category: str = ""
+    manual_review_need: str = ""
+    minimal_fields_required: list[str] = Field(default_factory=list)
+    suggested_huawei_target_family: str | None = None
+    reason: str = ""
+    source_line_numbers: list[int] = Field(default_factory=list)
+
+
+class ManualReviewDecisionInput(BaseModel):
+    """A single manual review decision submitted by the caller."""
+    candidate_id: str
+    decision_type: str
+    fields: dict[str, Any] = Field(default_factory=dict)
+
+
+class ManualReviewApplyRequest(BaseModel):
+    """Request body for the manual-review apply endpoint."""
+    task_id: str | None = None
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
+    decisions: list[ManualReviewDecisionInput] = Field(default_factory=list)
+    reprice: bool = False
+
+
+ManualReviewApplyErrorCode = Literal[
+    "unknown_candidate_id",
+    "wrong_decision_type",
+    "missing_required_field",
+    "invalid_field_type",
+    "invalid_field_value",
+    "unexpected_field",
+]
+
+
+class ManualReviewApplyError(BaseModel):
+    """A structured error from manual review apply validation."""
+    candidate_id: str | None = None
+    code: ManualReviewApplyErrorCode
+    message: str
+
+
+class ManualReviewApplyResult(BaseModel):
+    """Result of applying a single manual review decision."""
+    candidate_id: str
+    outcome: str
+    overrides: dict[str, Any] = Field(default_factory=dict)
+
+
+class ManualReviewApplyResponse(BaseModel):
+    """Response body for the manual-review apply endpoint."""
+    applied_count: int = 0
+    errors: list[ManualReviewApplyError] = Field(default_factory=list)
+    results: list[ManualReviewApplyResult] = Field(default_factory=list)
+    summary: dict[str, Any] = Field(default_factory=dict)
+
+
 class FlexibleQuotePreviewResponse(BaseModel):
     requirements: list[RequirementItem] = Field(default_factory=list)
     quote_ready_items: list[RequirementItem] = Field(default_factory=list)
@@ -390,6 +547,13 @@ class FlexibleQuotePreviewResponse(BaseModel):
     audit_log: list[AuditEntry] = Field(default_factory=list)
     quote_context: FlexibleQuoteContext = Field(default_factory=FlexibleQuoteContext)
     diagnostics: FlexibleQuoteDiagnostics = Field(default_factory=FlexibleQuoteDiagnostics)
+    manual_review_candidates: list[ManualReviewCandidate] = Field(default_factory=list)
+    billing_lines: list[dict[str, Any]] = Field(default_factory=list)
+    llm_aggregated_billing_items: list[dict[str, Any]] = Field(default_factory=list)
+    mapped_billing_resources: list[dict[str, Any]] = Field(default_factory=list)
+    billing_gap_analysis: dict[str, Any] = Field(default_factory=dict)
+    billing_reconciliation: dict[str, Any] = Field(default_factory=dict)
+    final_billing_quote_items: list[CloudBillingFinalQuoteItem] = Field(default_factory=list)
 
 
 class FlexibleReviewRequest(BaseModel):
@@ -398,6 +562,12 @@ class FlexibleReviewRequest(BaseModel):
     feedback: list[HumanFeedback] = Field(default_factory=list)
     matched_products: list[MatchedProduct] = Field(default_factory=list)
     audit_log: list[AuditEntry] = Field(default_factory=list)
+    billing_lines: list[dict[str, Any]] = Field(default_factory=list)
+    llm_aggregated_billing_items: list[dict[str, Any]] = Field(default_factory=list)
+    mapped_billing_resources: list[dict[str, Any]] = Field(default_factory=list)
+    billing_gap_analysis: dict[str, Any] = Field(default_factory=dict)
+    billing_reconciliation: dict[str, Any] = Field(default_factory=dict)
+    final_billing_quote_items: list[CloudBillingFinalQuoteItem] = Field(default_factory=list)
 
 
 FlexiblePreviewTaskStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]

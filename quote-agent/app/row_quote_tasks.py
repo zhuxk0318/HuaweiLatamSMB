@@ -9,7 +9,26 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from app.cloud_billing_workflow import cloud_billing_preview_graph
+from app.flexible_workflow import (
+    _detect_billing_document,
+    _route_after_validation,
+    deduplicate_items,
+    export_flexible_workbook,
+    extract_requirement_items,
+    ingest_files,
+    load_pricebook,
+    map_to_huawei_product,
+    normalize_requirements,
+    parse_documents,
+    quote_items,
+    resolve_price_components,
+    return_blockers,
+    summarize_quote,
+    validate_quote_readiness,
+)
 from app.models import (
+    FlexibleQuoteSummary,
     QuoteWorkbook,
     RowQuoteProgress,
     RowQuoteSummary,
@@ -18,6 +37,7 @@ from app.models import (
     RowQuoteTaskResponse,
     SheetSelection,
 )
+from app.others_quote_workflow import others_preview_graph
 from app.row_quote_workflow import TaskCancelledError, annotate_row_quote_workbook
 
 logger = logging.getLogger(__name__)
@@ -87,6 +107,181 @@ def _is_cancelled(task_id: str) -> bool:
         return bool(task and task.get("cancelled"))
 
 
+def _billing_summary_from_state(state: dict[str, Any]) -> RowQuoteSummary:
+    summary = FlexibleQuoteSummary.model_validate(state.get("summary", {}))
+    blockers = state.get("quote_blockers", [])
+    unquoted = state.get("unquoted_items", [])
+    quote_lines = state.get("quote_lines", [])
+    mapped = state.get("mapped_billing_resources", [])
+    unmatched = sum(1 for item in mapped if not item.get("huawei_product"))
+    manual_review = max(
+        len(blockers),
+        sum(1 for item in mapped if item.get("needs_manual_review")),
+    )
+    return RowQuoteSummary(
+        total_rows=len(mapped) or len(state.get("billing_lines", [])),
+        quoted_rows=len(quote_lines),
+        unmatched_rows=unmatched,
+        manual_review_rows=manual_review,
+        missing_price_rows=len(unquoted),
+        non_quote_rows=0,
+        total_ondemand_monthly=summary.total_monthly_price,
+        total_monthly=summary.total_monthly_price,
+        total_ri_1y_monthly=0,
+        currency=summary.currency,
+    )
+
+
+def _billing_progress_from_state(state: dict[str, Any]) -> RowQuoteProgress:
+    total_rows = len(state.get("mapped_billing_resources", [])) or len(state.get("billing_lines", []))
+    quoted_rows = len(state.get("quote_lines", []))
+    blocker_rows = len(state.get("quote_blockers", []))
+    unquoted_rows = len(state.get("unquoted_items", []))
+    mapped_rows = len(state.get("requirements", []))
+    priced_rows = quoted_rows + unquoted_rows
+    return RowQuoteProgress(
+        total_rows=total_rows,
+        processed_rows=priced_rows,
+        quoted_rows=quoted_rows,
+        manual_review_rows=blocker_rows,
+        missing_price_rows=unquoted_rows,
+        unmatched_rows=sum(1 for item in state.get("mapped_billing_resources", []) if not item.get("huawei_product")),
+        non_quote_rows=0,
+        mapped_rows=mapped_rows,
+        priced_rows=priced_rows,
+        stage_processed_rows=priced_rows,
+        stage_total_rows=total_rows,
+    )
+
+
+def _quote_summary_from_state(state: dict[str, Any]) -> RowQuoteSummary:
+    summary = FlexibleQuoteSummary.model_validate(state.get("summary", {}))
+    requirements = state.get("requirements", [])
+    quote_lines = state.get("quote_lines", [])
+    blockers = state.get("quote_blockers", [])
+    unquoted = state.get("unquoted_items", [])
+    total_rows = summary.total_input_items or len(requirements)
+    quoted_rows = len(quote_lines)
+    manual_review_rows = len(blockers)
+    missing_price_rows = len(unquoted)
+    unmatched_rows = max(total_rows - quoted_rows - manual_review_rows - missing_price_rows, 0)
+    return RowQuoteSummary(
+        total_rows=total_rows,
+        quoted_rows=quoted_rows,
+        unmatched_rows=unmatched_rows,
+        manual_review_rows=manual_review_rows,
+        missing_price_rows=missing_price_rows,
+        non_quote_rows=0,
+        total_ondemand_monthly=summary.total_monthly_price,
+        total_monthly=summary.total_monthly_price,
+        total_ri_1y_monthly=0,
+        currency=summary.currency,
+    )
+
+
+def _quote_progress_from_state(state: dict[str, Any]) -> RowQuoteProgress:
+    summary = _quote_summary_from_state(state)
+    processed_rows = summary.quoted_rows + summary.manual_review_rows + summary.missing_price_rows + summary.unmatched_rows
+    return RowQuoteProgress(
+        total_rows=summary.total_rows,
+        processed_rows=processed_rows,
+        quoted_rows=summary.quoted_rows,
+        manual_review_rows=summary.manual_review_rows,
+        missing_price_rows=summary.missing_price_rows,
+        unmatched_rows=summary.unmatched_rows,
+        non_quote_rows=summary.non_quote_rows,
+        mapped_rows=summary.total_rows,
+        priced_rows=summary.quoted_rows + summary.missing_price_rows,
+        stage_processed_rows=processed_rows,
+        stage_total_rows=summary.total_rows,
+    )
+
+
+def _is_billing_upload(upload: dict[str, Any], quote_context: dict[str, Any]) -> bool:
+    state: dict[str, Any] = {"files": [upload], "quote_context": quote_context, "audit_log": []}
+    state.update(ingest_files(state))
+    state.update(parse_documents(state))
+    return any(_detect_billing_document(doc) for doc in state.get("parsed_documents", []))
+
+
+def _run_billing_annotation_task(
+    upload: dict[str, Any],
+    quote_context: dict[str, Any],
+    *,
+    on_progress: Any,
+    on_stage: Any,
+    cancel_check: Any,
+) -> tuple[QuoteWorkbook, RowQuoteSummary]:
+    def progress_callback(stage: str, status: str, _message: str) -> None:
+        if status == "running":
+            on_stage(stage)
+        if callable(cancel_check) and cancel_check():
+            raise TaskCancelledError("Task was cancelled by user.")
+
+    state: dict[str, Any] = {
+        "files": [upload],
+        "quote_context": quote_context,
+        "audit_log": [],
+        "progress_callback": progress_callback,
+        "skip_billing_llm": True,
+    }
+
+    for stage_fn in (ingest_files, load_pricebook, parse_documents, extract_requirement_items, normalize_requirements, deduplicate_items, map_to_huawei_product):
+        state.update(stage_fn(state))
+        if callable(cancel_check) and cancel_check():
+            raise TaskCancelledError("Task was cancelled by user.")
+
+    on_progress(_billing_progress_from_state(state))
+
+    state.update(validate_quote_readiness(state))
+    if callable(cancel_check) and cancel_check():
+        raise TaskCancelledError("Task was cancelled by user.")
+
+    if _route_after_validation(state) == "needs_input":
+        state.update(return_blockers(state))
+    else:
+        state.update(resolve_price_components(state))
+        if callable(cancel_check) and cancel_check():
+            raise TaskCancelledError("Task was cancelled by user.")
+        on_progress(_billing_progress_from_state(state))
+        state.update(quote_items(state))
+
+    state.update(summarize_quote(state))
+    state.update(export_flexible_workbook(state))
+    on_progress(_billing_progress_from_state(state))
+    return QuoteWorkbook.model_validate(state["workbook"]), _billing_summary_from_state(state)
+
+
+def _run_quote_graph_annotation_task(
+    graph: Any,
+    upload: dict[str, Any],
+    quote_context: dict[str, Any],
+    *,
+    on_progress: Any,
+    on_stage: Any,
+    cancel_check: Any,
+) -> tuple[QuoteWorkbook, RowQuoteSummary]:
+    def progress_callback(stage: str, status: str, _message: str) -> None:
+        if status == "running":
+            on_stage(stage)
+        if callable(cancel_check) and cancel_check():
+            raise TaskCancelledError("Task was cancelled by user.")
+
+    state: dict[str, Any] = {
+        "files": [upload],
+        "quote_context": quote_context,
+        "audit_log": [],
+        "progress_callback": progress_callback,
+    }
+
+    state = graph.invoke(state)
+    if callable(cancel_check) and cancel_check():
+        raise TaskCancelledError("Task was cancelled by user.")
+    state.update(export_flexible_workbook(state))
+    on_progress(_quote_progress_from_state(state))
+    return QuoteWorkbook.model_validate(state["workbook"]), _quote_summary_from_state(state)
+
+
 def _run_annotation_task(task_id: str, upload: dict[str, Any], quote_context: dict[str, Any], sheet_selection: SheetSelection | None = None) -> None:
     def on_progress(progress: RowQuoteProgress) -> None:
         _update_progress(task_id, progress)
@@ -99,7 +294,42 @@ def _run_annotation_task(task_id: str, upload: dict[str, Any], quote_context: di
             raise TaskCancelledError("Task was cancelled by user.")
 
     try:
-        workbook, summary = annotate_row_quote_workbook(upload, quote_context, progress_callback=on_progress, stage_callback=on_stage, cancel_check=lambda: _is_cancelled(task_id), sheet_selection=sheet_selection)
+        quote_mode = quote_context.get("quote_mode")
+        if quote_mode == "cloud_billing":
+            workbook, summary = _run_quote_graph_annotation_task(
+                cloud_billing_preview_graph,
+                upload,
+                quote_context,
+                on_progress=on_progress,
+                on_stage=on_stage,
+                cancel_check=lambda: _is_cancelled(task_id),
+            )
+        elif quote_mode == "others":
+            workbook, summary = _run_quote_graph_annotation_task(
+                others_preview_graph,
+                upload,
+                quote_context,
+                on_progress=on_progress,
+                on_stage=on_stage,
+                cancel_check=lambda: _is_cancelled(task_id),
+            )
+        elif _is_billing_upload(upload, quote_context):
+            workbook, summary = _run_billing_annotation_task(
+                upload,
+                quote_context,
+                on_progress=on_progress,
+                on_stage=on_stage,
+                cancel_check=lambda: _is_cancelled(task_id),
+            )
+        else:
+            workbook, summary = annotate_row_quote_workbook(
+                upload,
+                quote_context,
+                progress_callback=on_progress,
+                stage_callback=on_stage,
+                cancel_check=lambda: _is_cancelled(task_id),
+                sheet_selection=sheet_selection,
+            )
         with _lock:
             task = _tasks.get(task_id)
             if not task:

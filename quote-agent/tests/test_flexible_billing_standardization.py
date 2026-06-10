@@ -320,7 +320,8 @@ class TestExtractRequirementItemsState:
         self, minimal_azure_doc: dict, monkeypatch: pytest.MonkeyPatch
     ):
         """When billing documents are present, extract_requirement_items must populate
-        billing_lines and standardized_billing_resources in state."""
+        billing_lines, billing_groups, llm_aggregated_billing_items, and
+        standardized_billing_resources in state."""
         monkeypatch.delenv("HUAWEI_MAAS_API_KEY", raising=False)
 
         # Build a minimal state that would reach extract_requirement_items
@@ -334,8 +335,12 @@ class TestExtractRequirementItemsState:
         result = extract_requirement_items(state)
 
         assert "billing_lines" in result
+        assert "billing_groups" in result
+        assert "llm_aggregated_billing_items" in result
         assert "standardized_billing_resources" in result
         assert len(result["billing_lines"]) > 0
+        assert len(result["billing_groups"]) > 0
+        assert len(result["llm_aggregated_billing_items"]) > 0
         assert len(result["standardized_billing_resources"]) > 0
         assert len(result["requirements"]) > 0
 

@@ -10,11 +10,22 @@ from app.hld_recommend import get_recommendation
 from app.proposal_tasks import create_proposal_task, get_proposal_artifact, get_proposal_task
 from app.flexible_pricing import query_flexible_pricing_catalog
 from app.flexible_workflow import (
+    apply_manual_review_from_api,
     build_flexible_preview_response,
     build_flexible_review_state,
     flexible_export_graph,
     flexible_preview_graph,
     flexible_review_graph,
+)
+from app.cloud_billing_workflow import (
+    cloud_billing_preview_graph,
+    cloud_billing_review_graph,
+    cloud_billing_export_graph,
+)
+from app.others_quote_workflow import (
+    others_preview_graph,
+    others_review_graph,
+    others_export_graph,
 )
 from app.models import (
     FlexibleCatalogResponse,
@@ -22,6 +33,10 @@ from app.models import (
     FlexiblePreviewTaskResponse,
     FlexibleQuotePreviewResponse,
     FlexibleReviewRequest,
+    ManualReviewApplyError,
+    ManualReviewApplyRequest,
+    ManualReviewApplyResponse,
+    ManualReviewApplyResult,
     ChatMessageRequest,
     ChatSessionCreatedResponse,
     ChatSessionResponse,
@@ -333,11 +348,37 @@ def _read_flexible_files(files: list[UploadFile]) -> list[dict[str, bytes | str]
 
 def _read_single_excel(upload: UploadFile) -> dict[str, bytes | str]:
     if not upload.filename or not upload.filename.lower().endswith(".xlsx"):
-        raise HTTPException(status_code=415, detail="Only Excel .xlsx files are supported for row-level flexible quotes.")
+        raise HTTPException(status_code=415, detail="Only Excel .xlsx files are supported for Others Quote.")
     content = upload.file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded Excel file is empty.")
     return {"filename": upload.filename, "content": content}
+
+
+def _read_billing_file(upload: UploadFile) -> dict[str, bytes | str]:
+    """Read a single file for Cloud Billing Quote (.xlsx or .csv)."""
+    if not upload.filename or not upload.filename.lower().endswith((".xlsx", ".csv")):
+        raise HTTPException(status_code=415, detail="Cloud Billing Quote supports .xlsx and .csv files only.")
+    content = upload.file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded billing file is empty.")
+    return {"filename": upload.filename, "content": content}
+
+
+def _read_others_excel(upload: UploadFile) -> dict[str, bytes | str]:
+    """Read a single file for Others Quote (.xlsx only)."""
+    if not upload.filename or not upload.filename.lower().endswith(".xlsx"):
+        raise HTTPException(status_code=415, detail="Others Quote only supports .xlsx files.")
+    content = upload.file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded Excel file is empty.")
+    return {"filename": upload.filename, "content": content}
+
+
+# ── Legacy flexible endpoints (compatibility only) ──────────────────────────────
+# These routes are kept for backward compatibility. New code should use
+# /api/quotes/cloud-billing/... or /api/quotes/others/... instead.
+# The flexible endpoint dispatches to the correct graph based on quote_mode.
 
 
 @app.post("/api/quotes/flexible/annotate/tasks", response_model=RowQuoteTaskCreatedResponse)
@@ -348,14 +389,21 @@ def create_flexible_annotate_task(
     customer_notes: str = Form(default=""),
     sheet_selection_mode: str = Form(default="first"),
     sheet_selection_input: str = Form(default=""),
+    quote_mode: str = Form(default=""),
 ) -> RowQuoteTaskCreatedResponse:
     if not customer_notes.strip():
         raise HTTPException(status_code=422, detail="customer_notes is required. Provide AI quote guidance for the annotation task.")
-    upload = _read_single_excel(flexible_file)
+    if quote_mode == "cloud_billing":
+        upload = _read_billing_file(flexible_file)
+    else:
+        upload = _read_single_excel(flexible_file)
     sheet_selection = SheetSelection(mode=sheet_selection_mode, selected_input=sheet_selection_input or None)
+    context = {"region": region or None, "language": lang, "customer_notes": customer_notes}
+    if quote_mode in ("cloud_billing", "others"):
+        context["quote_mode"] = quote_mode
     return create_annotation_task(
         upload,
-        {"region": region or None, "language": lang, "customer_notes": customer_notes},
+        context,
         sheet_selection=sheet_selection,
     )
 
@@ -389,11 +437,15 @@ def create_flexible_preview_task(
     customer_notes: str = Form(default=""),
     sheet_selection_mode: str = Form(default="first"),
     sheet_selection_input: str = Form(default=""),
+    quote_mode: str = Form(default=""),
 ) -> FlexiblePreviewTaskCreatedResponse:
     uploads = _read_flexible_files(flexible_files)
+    context = {"region": region or None, "language": lang, "customer_notes": customer_notes}
+    if quote_mode in ("cloud_billing", "others"):
+        context["quote_mode"] = quote_mode
     return create_preview_task(
         uploads,
-        {"region": region or None, "language": lang, "customer_notes": customer_notes},
+        context,
     )
 
 
@@ -410,12 +462,23 @@ def preview_flexible_quote(
     customer_notes: str = Form(default=""),
     sheet_selection_mode: str = Form(default="first"),
     sheet_selection_input: str = Form(default=""),
+    quote_mode: str = Form(default=""),
 ) -> FlexibleQuotePreviewResponse:
+    context = {"region": region or None, "language": lang, "customer_notes": customer_notes}
+    if quote_mode in ("cloud_billing", "others"):
+        context["quote_mode"] = quote_mode
+    # Dispatch to the appropriate graph based on quote_mode
+    if quote_mode == "cloud_billing":
+        graph = cloud_billing_preview_graph
+    elif quote_mode == "others":
+        graph = others_preview_graph
+    else:
+        graph = flexible_preview_graph
     try:
-        state = flexible_preview_graph.invoke(
+        state = graph.invoke(
             {
                 "files": _read_flexible_files(flexible_files),
-                "quote_context": {"region": region or None, "language": lang, "customer_notes": customer_notes},
+                "quote_context": context,
             }
         )
     except ValueError as exc:
@@ -429,8 +492,15 @@ def preview_flexible_quote(
 
 @app.post("/api/quotes/flexible/review", response_model=FlexibleQuotePreviewResponse)
 def review_flexible_quote(request: FlexibleReviewRequest) -> FlexibleQuotePreviewResponse:
+    quote_mode = request.quote_context.quote_mode
+    if quote_mode == "cloud_billing":
+        graph = cloud_billing_review_graph
+    elif quote_mode == "others":
+        graph = others_review_graph
+    else:
+        graph = flexible_review_graph
     try:
-        state = flexible_review_graph.invoke(build_flexible_review_state(request))
+        state = graph.invoke(build_flexible_review_state(request))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
@@ -442,8 +512,15 @@ def review_flexible_quote(request: FlexibleReviewRequest) -> FlexibleQuotePrevie
 
 @app.post("/api/quotes/flexible/export")
 def export_flexible_quote(request: FlexibleReviewRequest) -> Response:
+    quote_mode = request.quote_context.quote_mode
+    if quote_mode == "cloud_billing":
+        graph = cloud_billing_export_graph
+    elif quote_mode == "others":
+        graph = others_export_graph
+    else:
+        graph = flexible_export_graph
     try:
-        state = flexible_export_graph.invoke(build_flexible_review_state(request))
+        state = graph.invoke(build_flexible_review_state(request))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
@@ -456,6 +533,284 @@ def export_flexible_quote(request: FlexibleReviewRequest) -> Response:
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{workbook.filename}"'},
     )
+
+
+# ── Cloud Billing Quote endpoints ───────────────────────────────────────────────
+
+
+# ── Cloud Billing Quote endpoints ────────────────────────────────────────────────
+# Public cloud monthly billing aggregation path: ingest Azure/AWS/GCP billing
+# exports, aggregate billing lines, map to Huawei Cloud products, price, summarize.
+
+
+@app.post("/api/quotes/cloud-billing/annotate/tasks", response_model=RowQuoteTaskCreatedResponse)
+def create_cloud_billing_annotate_task(
+    flexible_file: UploadFile = File(...),
+    region: str | None = Form(default=None),
+    lang: str = Form(default="en"),
+    customer_notes: str = Form(default=""),
+    sheet_selection_mode: str = Form(default="first"),
+    sheet_selection_input: str = Form(default=""),
+) -> RowQuoteTaskCreatedResponse:
+    """Create a row-quote annotation task for cloud billing exports (.xlsx/.csv)."""
+    if not customer_notes.strip():
+        raise HTTPException(status_code=422, detail="customer_notes is required. Provide AI quote guidance for the cloud billing annotation task.")
+    upload = _read_billing_file(flexible_file)
+    sheet_selection = SheetSelection(mode=sheet_selection_mode, selected_input=sheet_selection_input or None)
+    return create_annotation_task(
+        upload,
+        {"region": region or None, "language": lang, "customer_notes": customer_notes, "quote_mode": "cloud_billing"},
+        sheet_selection=sheet_selection,
+    )
+
+
+@app.get("/api/quotes/cloud-billing/annotate/tasks/{task_id}", response_model=RowQuoteTaskResponse)
+def get_cloud_billing_annotate_task(task_id: str) -> RowQuoteTaskResponse:
+    return get_annotation_task(task_id)
+
+
+@app.get("/api/quotes/cloud-billing/annotate/tasks/{task_id}/export")
+def export_cloud_billing_annotate_task(task_id: str) -> Response:
+    workbook = get_annotation_workbook(task_id)
+    workbook = workbook.model_copy(update={"filename": f"{_safe_ascii_filename(workbook.filename)}.xlsx"})
+    return Response(
+        content=workbook.content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{workbook.filename}"'},
+    )
+
+
+@app.post("/api/quotes/cloud-billing/annotate/tasks/{task_id}/cancel", response_model=RowQuoteTaskResponse)
+def cancel_cloud_billing_annotate_task(task_id: str) -> RowQuoteTaskResponse:
+    return cancel_annotation_task(task_id)
+
+
+@app.post("/api/quotes/cloud-billing/preview", response_model=FlexibleQuotePreviewResponse)
+def preview_cloud_billing_quote(
+    flexible_files: list[UploadFile] = File(...),
+    region: str | None = Form(default=None),
+    lang: str = Form(default="en"),
+    customer_notes: str = Form(default=""),
+    sheet_selection_mode: str = Form(default="first"),
+    sheet_selection_input: str = Form(default=""),
+) -> FlexibleQuotePreviewResponse:
+    """Preview a cloud billing quote. Accepts .xlsx and .csv billing exports."""
+    uploads = _read_flexible_files(flexible_files)
+    context = {"region": region or None, "language": lang, "customer_notes": customer_notes, "quote_mode": "cloud_billing"}
+    try:
+        state = cloud_billing_preview_graph.invoke({"files": uploads, "quote_context": context})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+    return build_flexible_preview_response(state)
+
+
+@app.post("/api/quotes/cloud-billing/review", response_model=FlexibleQuotePreviewResponse)
+def review_cloud_billing_quote(request: FlexibleReviewRequest) -> FlexibleQuotePreviewResponse:
+    """Review a cloud billing quote with manual feedback."""
+    if request.quote_context.quote_mode is None:
+        request.quote_context.quote_mode = "cloud_billing"
+    try:
+        state = cloud_billing_review_graph.invoke(build_flexible_review_state(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+    return build_flexible_preview_response(state)
+
+
+@app.post("/api/quotes/cloud-billing/export")
+def export_cloud_billing_quote(request: FlexibleReviewRequest) -> Response:
+    """Export a cloud billing quote workbook."""
+    if request.quote_context.quote_mode is None:
+        request.quote_context.quote_mode = "cloud_billing"
+    try:
+        state = cloud_billing_export_graph.invoke(build_flexible_review_state(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+    workbook = state["workbook"]
+    return Response(
+        content=workbook.content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{workbook.filename}"'},
+    )
+
+
+# ── Others Quote endpoints ──────────────────────────────────────────────────────
+# Row-by-row requirement matching path: ingest custom requirement sheets,
+# match rows one-by-one against Huawei Cloud products, price, summarize.
+
+
+@app.post("/api/quotes/others/annotate/tasks", response_model=RowQuoteTaskCreatedResponse)
+def create_others_annotate_task(
+    flexible_file: UploadFile = File(...),
+    region: str | None = Form(default=None),
+    lang: str = Form(default="en"),
+    customer_notes: str = Form(default=""),
+    sheet_selection_mode: str = Form(default="first"),
+    sheet_selection_input: str = Form(default=""),
+) -> RowQuoteTaskCreatedResponse:
+    """Create a row-quote annotation task for non-billing Excel files (.xlsx only)."""
+    if not customer_notes.strip():
+        raise HTTPException(status_code=422, detail="customer_notes is required. Provide AI quote guidance for the Others Quote annotation task.")
+    upload = _read_others_excel(flexible_file)
+    sheet_selection = SheetSelection(mode=sheet_selection_mode, selected_input=sheet_selection_input or None)
+    return create_annotation_task(
+        upload,
+        {"region": region or None, "language": lang, "customer_notes": customer_notes, "quote_mode": "others"},
+        sheet_selection=sheet_selection,
+    )
+
+
+@app.get("/api/quotes/others/annotate/tasks/{task_id}", response_model=RowQuoteTaskResponse)
+def get_others_annotate_task(task_id: str) -> RowQuoteTaskResponse:
+    return get_annotation_task(task_id)
+
+
+@app.get("/api/quotes/others/annotate/tasks/{task_id}/export")
+def export_others_annotate_task(task_id: str) -> Response:
+    workbook = get_annotation_workbook(task_id)
+    workbook = workbook.model_copy(update={"filename": f"{_safe_ascii_filename(workbook.filename)}.xlsx"})
+    return Response(
+        content=workbook.content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{workbook.filename}"'},
+    )
+
+
+@app.post("/api/quotes/others/annotate/tasks/{task_id}/cancel", response_model=RowQuoteTaskResponse)
+def cancel_others_annotate_task(task_id: str) -> RowQuoteTaskResponse:
+    return cancel_annotation_task(task_id)
+
+
+@app.post("/api/quotes/others/preview", response_model=FlexibleQuotePreviewResponse)
+def preview_others_quote(
+    flexible_files: list[UploadFile] = File(...),
+    region: str | None = Form(default=None),
+    lang: str = Form(default="en"),
+    customer_notes: str = Form(default=""),
+    sheet_selection_mode: str = Form(default="first"),
+    sheet_selection_input: str = Form(default=""),
+) -> FlexibleQuotePreviewResponse:
+    """Preview an Others Quote. Accepts .xlsx requirement/comparison files only."""
+    if not flexible_files:
+        raise HTTPException(status_code=400, detail="At least one .xlsx file is required.")
+    uploads: list[dict[str, bytes | str]] = []
+    for f in flexible_files:
+        uploads.append(_read_others_excel(f))
+    if not uploads:
+        raise HTTPException(status_code=400, detail="At least one .xlsx file is required.")
+    context = {"region": region or None, "language": lang, "customer_notes": customer_notes, "quote_mode": "others"}
+    try:
+        state = others_preview_graph.invoke({"files": uploads, "quote_context": context})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+    return build_flexible_preview_response(state)
+
+
+@app.post("/api/quotes/others/review", response_model=FlexibleQuotePreviewResponse)
+def review_others_quote(request: FlexibleReviewRequest) -> FlexibleQuotePreviewResponse:
+    """Review an Others Quote with manual feedback."""
+    if request.quote_context.quote_mode is None:
+        request.quote_context.quote_mode = "others"
+    try:
+        state = others_review_graph.invoke(build_flexible_review_state(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+    return build_flexible_preview_response(state)
+
+
+@app.post("/api/quotes/others/export")
+def export_others_quote(request: FlexibleReviewRequest) -> Response:
+    """Export an Others Quote workbook."""
+    if request.quote_context.quote_mode is None:
+        request.quote_context.quote_mode = "others"
+    try:
+        state = others_export_graph.invoke(build_flexible_review_state(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+    workbook = state["workbook"]
+    return Response(
+        content=workbook.content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{workbook.filename}"'},
+    )
+
+
+# --- Manual review apply endpoint (Phase Next+10) ---
+
+
+@app.post("/api/quotes/flexible/manual-review/apply", response_model=ManualReviewApplyResponse)
+def apply_manual_review(request: ManualReviewApplyRequest) -> ManualReviewApplyResponse:
+    """Apply manual review decisions to flexible quote candidates.
+
+    Validates the decisions against the provided candidates, applies valid ones,
+    and returns structured errors/results/summary.
+
+    When reprice=True, also recomputes readiness/pricing/quote after applying
+    overrides and returns reprice_preview_summary with updated counts.
+    """
+    candidates = request.candidates
+    state_for_reprice = None
+
+    if not candidates and request.task_id:
+        # Attempt to load candidates from an existing preview task
+        try:
+            task_resp = get_preview_task(request.task_id)
+        except HTTPException:
+            raise HTTPException(status_code=404, detail=f"Preview task '{request.task_id}' not found.")
+        if task_resp.result and task_resp.result.manual_review_candidates:
+            candidates = [c.model_dump() for c in task_resp.result.manual_review_candidates]
+
+    if not candidates:
+        raise HTTPException(status_code=400, detail="No candidates provided and none could be loaded from task_id.")
+
+    decisions = [d.model_dump() for d in request.decisions]
+    result = apply_manual_review_from_api(
+        decisions,
+        candidates,
+        reprice=request.reprice,
+        state=state_for_reprice,
+    )
+
+    response = ManualReviewApplyResponse(
+        applied_count=result["applied_count"],
+        errors=[
+            ManualReviewApplyError.model_validate(e) for e in result["errors"]
+        ],
+        results=[
+            ManualReviewApplyResult.model_validate(r) for r in result["results"]
+        ],
+        summary=result["summary"],
+    )
+    # Include reprice results if present
+    if "reprice_preview_summary" in result:
+        response.summary["reprice_preview"] = result["reprice_preview_summary"]
+    if "reprice_updated_counts" in result:
+        response.summary["updated_counts"] = result["reprice_updated_counts"]
+
+    return response
 
 
 # --- HLD Design endpoints ---

@@ -63,9 +63,18 @@ def _catalog_for_region(region: str = "chile") -> list[dict]:
 def _make_billing_state(azure_document: dict, region: str = "chile") -> dict:
     """Build a full billing state through the pipeline (no LLM)."""
     lines = _extract_billing_lines(azure_document)
+    # Use aggregation path (same as main workflow)
+    from app.flexible_workflow import (
+        _group_billing_lines,
+        _aggregate_billing_groups_fallback,
+        _build_requirements_from_llm_aggregated_billing_items,
+    )
+    groups = _group_billing_lines(lines)
+    agg_items = _aggregate_billing_groups_fallback(groups)
+    requirements = _build_requirements_from_llm_aggregated_billing_items(agg_items)
+    # Legacy fields for backward compat
     standardized = _standardize_billing_lines(lines, FlexibleQuoteContext(region=region))
     mapped = _map_standardized_billing_resources_to_huawei(standardized)
-    requirements = _build_requirements_from_mapped_billing_resources(mapped)
 
     # Normalize
     norm_state = {
@@ -117,6 +126,7 @@ def _make_billing_state(azure_document: dict, region: str = "chile") -> dict:
         "quote_blockers": val_result["quote_blockers"],
         "unquoted_items": res_result["unquoted_items"],
         "quote_context": {"region": region},
+        "llm_aggregated_billing_items": agg_items,
         "audit_log": [],
         "progress_callback": None,
     }
@@ -130,8 +140,12 @@ def _make_billing_state(azure_document: dict, region: str = "chile") -> dict:
         "unquoted_items": res_result["unquoted_items"],
         "price_components": res_result["price_components"],
         "summary": sum_result["summary"],
+        "billing_gap_analysis": sum_result.get("billing_gap_analysis", {}),
+        "billing_reconciliation": sum_result.get("billing_reconciliation", {}),
         "mapped_billing_resources": mapped,
         "billing_lines": lines,
+        "billing_groups": groups,
+        "llm_aggregated_billing_items": agg_items,
         "standardized_billing_resources": standardized,
         "quote_context": {"region": region},
         "audit_log": [],
@@ -185,12 +199,13 @@ class TestNonBillingExport:
 # ---------------------------------------------------------------------------
 
 class TestDetailRowCount:
-    def test_ecs_sheet_contains_one_row_per_mapped_billing_resource(self, azure_document: dict, monkeypatch: pytest.MonkeyPatch):
+    def test_ecs_sheet_contains_one_row_per_aggregated_billing_item(self, azure_document: dict, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("HUAWEI_MAAS_API_KEY", raising=False)
         state = _make_billing_state(azure_document)
         detail_rows = _build_billing_detail_rows(state)
-        mapped_count = len(state["mapped_billing_resources"])
-        assert len(detail_rows) == mapped_count
+        # Detail rows now come from aggregated items, not mapped resources
+        agg_count = len(state["llm_aggregated_billing_items"])
+        assert len(detail_rows) == agg_count
 
 
 # ---------------------------------------------------------------------------

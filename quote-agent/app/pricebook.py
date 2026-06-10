@@ -167,13 +167,12 @@ def pick_ecs_match(
     return None
 
 
-def _pick_ecs_nearest(
-    region_catalog: dict[str, Any],
+def _pick_ecs_nearest_sort_key(
+    item: dict[str, Any],
     vcpu: int,
     memory_gib: float,
-    category_tiers: list[list[str]] | None = None,
-) -> dict[str, Any] | None:
-    """Pick ECS spec with the smallest combined ratio distance to the requested shape.
+) -> tuple:
+    """Build the nearest-match sort key for a single ECS candidate.
 
     Scoring:
         cpu_ratio_diff = abs(candidate_vcpu - requested_vcpu) / max(requested_vcpu, 1)
@@ -188,6 +187,108 @@ def _pick_ecs_nearest(
         5. Closer memory to requested (abs diff).
         6. Stable sort by spec name.
     """
+    cand_vcpu = int(item["vcpu"])
+    cand_mem = float(item["memoryGiB"])
+    cand_monthly = float(item["hourlyUsd"]) * HOURS_PER_MONTH
+
+    cpu_ratio_diff = abs(cand_vcpu - vcpu) / max(vcpu, 1)
+    mem_ratio_diff = abs(cand_mem - memory_gib) / max(memory_gib, 1)
+    score = cpu_ratio_diff + mem_ratio_diff
+
+    # Tie-breaker: prefer specs that meet or exceed the request (0 = meets, 1 = undersizes)
+    undersizes = 0 if (cand_vcpu >= vcpu and cand_mem >= memory_gib) else 1
+
+    return (
+        score,
+        undersizes,
+        cand_monthly,
+        abs(cand_vcpu - vcpu),
+        abs(cand_mem - memory_gib),
+        str(item["spec"]),
+    )
+
+
+def _pick_ecs_nearest_from_candidates(
+    candidates: list[dict[str, Any]],
+    vcpu: int,
+    memory_gib: float,
+) -> dict[str, Any] | None:
+    """Pick the nearest ECS spec from a given candidate list.
+
+    Returns the candidate with the smallest combined ratio distance.
+    Returns None if candidates is empty.
+    """
+    if not candidates:
+        return None
+    return sorted(
+        candidates,
+        key=lambda item: _pick_ecs_nearest_sort_key(item, vcpu, memory_gib),
+    )[0]
+
+
+def _pick_ecs_by_family_policy(
+    ecs_items: list[dict[str, Any]],
+    vcpu: int,
+    memory_gib: float,
+    category_tiers: list[list[str]],
+    allow_undersized_fallback: bool = True,
+) -> dict[str, Any] | None:
+    """Pick the best ECS spec using family-policy tier ordering with undersize protection.
+
+    For each tier in order:
+      1. Collect candidates in that tier whose vcpu >= requested AND memoryGiB >= requested.
+      2. If meeting candidates exist, pick the nearest among them and return immediately.
+      3. If no meeting candidate in this tier, proceed to the next tier.
+
+    If no tier has a meeting candidate:
+      - If allow_undersized_fallback is True, fall back to the nearest spec across
+        all candidates (including undersized), trying tiers in order first, then
+        all items as last resort.
+      - If allow_undersized_fallback is False, return None.
+
+    Returns:
+        The selected ECS spec dict, or None if no match possible.
+    """
+    if not ecs_items:
+        return None
+
+    # Phase 1: try each tier for a meeting candidate
+    for tier_categories in category_tiers:
+        tier_items = [item for item in ecs_items if item["category"] in tier_categories]
+        meeting = [
+            item for item in tier_items
+            if int(item["vcpu"]) >= vcpu and float(item["memoryGiB"]) >= memory_gib
+        ]
+        if meeting:
+            return _pick_ecs_nearest_from_candidates(meeting, vcpu, memory_gib)
+
+    # Phase 2: no tier had a meeting candidate — undersized fallback
+    if not allow_undersized_fallback:
+        return None
+
+    # Try each tier for nearest (possibly undersized) before going to full catalog
+    for tier_categories in category_tiers:
+        tier_items = [item for item in ecs_items if item["category"] in tier_categories]
+        if tier_items:
+            return _pick_ecs_nearest_from_candidates(tier_items, vcpu, memory_gib)
+
+    # Last resort: any ECS item
+    return _pick_ecs_nearest_from_candidates(ecs_items, vcpu, memory_gib)
+
+
+def _pick_ecs_nearest(
+    region_catalog: dict[str, Any],
+    vcpu: int,
+    memory_gib: float,
+    category_tiers: list[list[str]] | None = None,
+) -> dict[str, Any] | None:
+    """Pick ECS spec with the smallest combined ratio distance to the requested shape.
+
+    Uses family-policy tier ordering with undersize protection:
+      - First tries each tier for candidates that meet or exceed the requested
+        CPU and memory.
+      - Only falls back to undersized nearest when no tier has a meeting candidate.
+    """
     ecs_items = region_catalog["ecs"]
     if not ecs_items:
         return None
@@ -195,31 +296,4 @@ def _pick_ecs_nearest(
     if category_tiers is None:
         category_tiers = FAMILY_POLICY_TIERS["default"]
 
-    def _sort_key(item: dict[str, Any]) -> tuple:
-        cand_vcpu = int(item["vcpu"])
-        cand_mem = float(item["memoryGiB"])
-        cand_monthly = float(item["hourlyUsd"]) * HOURS_PER_MONTH
-
-        cpu_ratio_diff = abs(cand_vcpu - vcpu) / max(vcpu, 1)
-        mem_ratio_diff = abs(cand_mem - memory_gib) / max(memory_gib, 1)
-        score = cpu_ratio_diff + mem_ratio_diff
-
-        # Tie-breaker: prefer specs that meet or exceed the request (0 = meets, 1 = undersizes)
-        undersizes = 0 if (cand_vcpu >= vcpu and cand_mem >= memory_gib) else 1
-
-        return (
-            score,
-            undersizes,
-            cand_monthly,
-            abs(cand_vcpu - vcpu),
-            abs(cand_mem - memory_gib),
-            str(item["spec"]),
-        )
-
-    for tier_categories in category_tiers:
-        tier = [item for item in ecs_items if item["category"] in tier_categories]
-        if tier:
-            return sorted(tier, key=_sort_key)[0]
-
-    # Fallback: any ECS item if no preferred category matches
-    return sorted(ecs_items, key=_sort_key)[0]
+    return _pick_ecs_by_family_policy(ecs_items, vcpu, memory_gib, category_tiers)
