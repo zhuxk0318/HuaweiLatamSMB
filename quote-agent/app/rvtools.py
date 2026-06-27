@@ -14,15 +14,27 @@ class RvToolsParseError(ValueError):
 
 # ── Column alias constants ──────────────────────────────────────────────────────
 
-VM_NAME_COLUMNS = ["VM", "VM Name", "Name", "Equipo"]
+VM_NAME_COLUMNS = [
+    "VM",
+    "VM Name",
+    "Name",
+    "Equipo",
+    "Server",
+    "Servidor",
+    "Hostname",
+    "Host Name",
+    "Nombre",
+    "Servicio",
+    "Service",
+]
 
 CUSTOMER_COLUMNS = ["Cliente", "Customer", "Client"]
 
 WORKLOAD_COLUMNS = ["Tipo SAP", "Workload Type", "Application Type"]
 
-CPU_COLUMNS = ["CPUs", "CPU", "vCPU", "vCPUs", "NumCpu", "Num CPU", "Num CPUs"]
+CPU_COLUMNS = ["CPUs", "CPU", "vCPU", "vCPUs", "NumCpu", "Num CPU", "Num CPUs", "Cores", "Core", "Processor"]
 
-MEMORY_GIB_COLUMNS = ["Memory in GiB", "Memory GB", "Memory GiB", "MemoryGB", "Mem"]
+MEMORY_GIB_COLUMNS = ["Memory in GiB", "Memory GB", "Memory GiB", "MemoryGB", "Mem", "RAM", "RAM GB", "Memoria", "Memoria GB"]
 
 MEMORY_MIB_COLUMNS = ["Memory", "Memory MB", "Memory MiB", "Memory Mib", "Memory Size"]
 
@@ -32,6 +44,11 @@ STORAGE_GIB_COLUMNS = [
     "Storage GB",
     "Storage(GB)",
     "HD",
+    "Disk",
+    "Disk GB",
+    "Disco",
+    "Storage",
+    "Total Disk",
 ]
 
 STORAGE_MIB_COLUMNS = [
@@ -41,7 +58,7 @@ STORAGE_MIB_COLUMNS = [
     "Capacity MB",
 ]
 
-OS_COLUMNS = ["OS according to the configuration file", "OS", "Guest OS", "S.O"]
+OS_COLUMNS = ["OS according to the configuration file", "OS", "Guest OS", "S.O", "Sistema Operativo"]
 
 POWER_STATE_COLUMNS = ["Powerstate", "Power State", "State"]
 
@@ -56,12 +73,25 @@ def _normalize_key(value: Any) -> str:
     return "".join(ch for ch in str(value).strip().lower() if ch.isalnum())
 
 
+def _normalized_column_candidates(value: Any) -> set[str]:
+    raw = str(value).strip().lower()
+    parts = [raw]
+    if "." in raw:
+        parts.extend(part.strip() for part in raw.split(".") if part.strip())
+        parts.append(raw.split(".")[-1].strip())
+    return {_normalize_key(part) for part in parts if part}
+
+
 def _first_value(row: dict[str, Any], names: list[str]) -> Any:
-    normalized = {_normalize_key(key): value for key, value in row.items()}
+    normalized: dict[str, Any] = {}
+    for key, value in row.items():
+        for candidate in _normalized_column_candidates(key):
+            normalized.setdefault(candidate, value)
     for name in names:
-        value = normalized.get(_normalize_key(name))
-        if value not in (None, ""):
-            return value
+        for candidate in _normalized_column_candidates(name):
+            value = normalized.get(candidate)
+            if value not in (None, ""):
+                return value
     return None
 
 
@@ -105,8 +135,32 @@ def _disk_to_gib(row: dict[str, Any]) -> float:
 
 def _has_any_column(frame: pd.DataFrame, aliases: list[str]) -> bool:
     """Return True if the DataFrame has any column matching one of the aliases."""
-    available = {_normalize_key(col) for col in frame.columns}
-    return any(_normalize_key(alias) in available for alias in aliases)
+    available: set[str] = set()
+    for col in frame.columns:
+        available.update(_normalized_column_candidates(col))
+    for alias in aliases:
+        if any(candidate in available for candidate in _normalized_column_candidates(alias)):
+            return True
+    return False
+
+
+def _inventory_frame_score(frame: pd.DataFrame) -> tuple[int, list[str]]:
+    matched: list[str] = []
+    if _has_any_column(frame, VM_NAME_COLUMNS):
+        matched.append("vm")
+    if _has_any_column(frame, CPU_COLUMNS):
+        matched.append("cpu")
+    if _has_any_column(frame, MEMORY_GIB_COLUMNS) or _has_any_column(frame, MEMORY_MIB_COLUMNS):
+        matched.append("memory")
+    if _has_any_column(frame, STORAGE_GIB_COLUMNS) or _has_any_column(frame, STORAGE_MIB_COLUMNS):
+        matched.append("storage")
+    return len(matched), matched
+
+
+def _preview_columns(frame: pd.DataFrame, limit: int = 12) -> str:
+    columns = [str(column) for column in frame.columns[:limit]]
+    suffix = "" if len(frame.columns) <= limit else f", ... +{len(frame.columns) - limit} more"
+    return ", ".join(columns) + suffix
 
 
 def _make_unique_headers(values: list[Any]) -> list[str]:
@@ -145,17 +199,34 @@ def _inventory_candidate_frames(frame: pd.DataFrame) -> list[pd.DataFrame]:
 
 
 def _is_inventory_like_frame(frame: pd.DataFrame) -> bool:
-    """Score-based check: a sheet is inventory-like if it has VM + CPU + Memory + Storage columns."""
-    score = 0
-    if _has_any_column(frame, VM_NAME_COLUMNS):
-        score += 1
-    if _has_any_column(frame, CPU_COLUMNS):
-        score += 1
-    if _has_any_column(frame, MEMORY_GIB_COLUMNS) or _has_any_column(frame, MEMORY_MIB_COLUMNS):
-        score += 1
-    if _has_any_column(frame, STORAGE_GIB_COLUMNS) or _has_any_column(frame, STORAGE_MIB_COLUMNS):
-        score += 1
-    return score >= 4
+    """Score-based check: VM inventories need VM + CPU + memory; storage may be absent."""
+    _score, matched = _inventory_frame_score(frame)
+    required = {"vm", "cpu", "memory"}
+    return required.issubset(set(matched))
+
+
+def _workbook_inventory_diagnostics(
+    workbook: dict[str, pd.DataFrame],
+    selected_names: list[str],
+) -> str:
+    snippets: list[str] = []
+    ordered_names = list(dict.fromkeys(selected_names + list(workbook.keys())))
+    for sheet_name in ordered_names[:6]:
+        frame = workbook.get(sheet_name)
+        if frame is None or frame.empty:
+            snippets.append(f"{sheet_name}: empty")
+            continue
+        best_score = -1
+        best_matched: list[str] = []
+        best_columns = ""
+        for candidate in _inventory_candidate_frames(frame):
+            score, matched = _inventory_frame_score(candidate)
+            if score > best_score:
+                best_score = score
+                best_matched = matched
+                best_columns = _preview_columns(candidate)
+        snippets.append(f"{sheet_name}: matched={best_matched or []}; columns=[{best_columns}]")
+    return " Sheets scanned: " + " | ".join(snippets) if snippets else ""
 
 
 def _find_inventory_sheet(
@@ -335,6 +406,8 @@ def parse_rvtools_workbook(
         return parsed, info_rows, []
 
     # ── Nothing usable found ────────────────────────────────────────────────
+    diagnostics = _workbook_inventory_diagnostics(workbook, selected_names)
     raise RvToolsParseError(
-        "No vInfo sheet or inventory-like sheet with VM/CPU/Memory/Storage columns was found."
+        "No vInfo sheet or inventory-like sheet with VM/CPU/Memory columns was found."
+        f"{diagnostics}"
     )

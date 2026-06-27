@@ -60,7 +60,13 @@ from app.row_quote_workflow import _safe_ascii_filename
 from app.rvtools_preview_tasks import get_preview_state, store_preview_result
 from app.workflow import build_preview_response, export_excel, export_graph, preview_graph, multi_preview_graph, multi_export_graph, parse_rvtools_multi
 
-app = FastAPI(title="LangGraph Quote Agent", version="0.1.0")
+app = FastAPI(
+    title="LangGraph Quote Agent",
+    version="0.1.0",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
 
 @app.get("/healthz")

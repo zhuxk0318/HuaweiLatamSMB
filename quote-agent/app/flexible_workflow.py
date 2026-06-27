@@ -40,6 +40,7 @@ from app.models import (
     RequirementItem,
     StorageSpec,
 )
+from app.rvtools import CPU_COLUMNS, MEMORY_GIB_COLUMNS, MEMORY_MIB_COLUMNS, OS_COLUMNS, STORAGE_GIB_COLUMNS, STORAGE_MIB_COLUMNS, VM_NAME_COLUMNS
 
 SUPPORTED_EXTENSIONS = {"xlsx", "csv", "txt"}
 
@@ -529,9 +530,16 @@ def _detect_excel_header_depth(frame: pd.DataFrame) -> int:
             "service period",
         ]
     )
+    second_has_inventory_header = (
+        _document_has_any_column(second, VM_NAME_COLUMNS)
+        and _document_has_any_column(second, CPU_COLUMNS)
+        and _document_has_any_column(second, MEMORY_GIB_COLUMNS + MEMORY_MIB_COLUMNS)
+    )
     if has_group_header and has_second_field_header:
         return 2
     if _looks_like_placeholder_header(first) and second_has_billing_header:
+        return 2
+    if len([value for value in first if value]) <= 2 and second_has_inventory_header:
         return 2
     return 1
 
@@ -656,6 +664,189 @@ def _coerce_input_profile(raw_profile: Any, fallback: FlexibleInputProfile) -> F
                 rationale=str(raw_profile.get("rationale") or "LLM indicated a comparison-style input."),
             )
         return fallback
+
+
+def _normalize_llm_message_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                if isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+                elif isinstance(item.get("content"), str):
+                    parts.append(item["content"])
+        return "".join(parts)
+    if isinstance(content, dict):
+        if isinstance(content.get("text"), str):
+            return content["text"]
+        if isinstance(content.get("content"), str):
+            return content["content"]
+    return ""
+
+
+def _parse_llm_json_content(content: Any) -> dict[str, Any]:
+    text = _normalize_llm_message_content(content).strip()
+    if not text:
+        raise ValueError("Empty LLM content")
+    fence_match = re.match(r"```(?:json)?\s*\n(.*?)\n```", text, re.DOTALL)
+    if fence_match:
+        text = fence_match.group(1).strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        object_match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not object_match:
+            raise
+        parsed = json.loads(object_match.group(0))
+    if not isinstance(parsed, dict):
+        raise ValueError("LLM content did not decode to a JSON object")
+    return parsed
+
+
+def _build_heuristic_schema_understanding(parsed_documents: list[dict[str, Any]]) -> dict[str, Any]:
+    schema_mapping: dict[str, str | list[str] | None] = {}
+    for field in ("product", "quantity", "region", "spec", "notes"):
+        candidates: list[str] = []
+        for document in parsed_documents:
+            columns = [str(column) for column in document.get("columns", [])]
+            rows = list(document.get("rows", []))
+            selected = _pick_column(columns, DEFAULT_SCHEMA_ALIASES[field])
+            preferred = _prefer_huawei_column(columns, rows, selected, field)
+            if preferred and preferred not in candidates:
+                candidates.append(preferred)
+        schema_mapping[field] = candidates or None
+    profile = _infer_input_profile(parsed_documents)
+    return {
+        "schema_mapping": schema_mapping,
+        "profile": profile.model_dump(),
+        "extraction_hints": {
+            "mode": "heuristic_fallback",
+            "rationale": "Built from local header aliases after MaaS schema understanding failed.",
+        },
+        "_llm_model": None,
+        "_llm_attempts": 0,
+    }
+
+
+def _sanitize_schema_mapping_payload(raw_mapping: Any) -> dict[str, Any]:
+    if not isinstance(raw_mapping, dict):
+        return {}
+    sanitized: dict[str, Any] = {}
+    for field in ("product", "quantity", "region", "spec", "notes"):
+        value = raw_mapping.get(field)
+        if isinstance(value, dict):
+            flattened = [str(item).strip() for item in value.values() if str(item).strip()]
+            deduped = list(dict.fromkeys(flattened))
+            sanitized[field] = deduped or None
+        else:
+            sanitized[field] = value
+    return sanitized
+
+
+def _resolve_selected_columns(columns: list[str], mapping: str | list[str] | None, field: str) -> list[str]:
+    candidates: list[str] = []
+    if isinstance(mapping, str):
+        selected = _resolve_selected_column(columns, mapping, field)
+        return [selected] if selected else []
+    if isinstance(mapping, list):
+        for item in mapping:
+            selected = _resolve_selected_column(columns, str(item), field)
+            if selected and selected not in candidates:
+                candidates.append(selected)
+        return candidates
+    selected = _resolve_selected_column(columns, None, field)
+    return [selected] if selected else []
+
+
+def _join_columns_as_spec(row: dict[str, Any], columns: list[str]) -> str | None:
+    parts: list[str] = []
+    for column in columns:
+        value = str(row.get(column, "")).strip()
+        if not value:
+            continue
+        label = column.split(".")[-1].strip()
+        parts.append(f"{label}={value}")
+    return " | ".join(parts) if parts else None
+
+
+def _document_has_any_column(columns: list[str], aliases: list[str]) -> bool:
+    normalized_candidates: set[str] = set()
+    for column in columns:
+        raw = str(column).strip().lower()
+        normalized_candidates.add(re.sub(r"[^a-z0-9]", "", raw))
+        normalized_candidates.add(re.sub(r"[^a-z0-9]", "", raw.split(".")[-1]))
+    return any(re.sub(r"[^a-z0-9]", "", alias.strip().lower()) in normalized_candidates for alias in aliases)
+
+
+def _column_matches_aliases(column: str | None, aliases: list[str]) -> bool:
+    if not column:
+        return False
+    raw = str(column).strip().lower()
+    candidates = [raw, raw.split(".")[-1]]
+    normalized_candidates = {re.sub(r"[^a-z0-9]", "", item) for item in candidates}
+    return any(
+        alias_norm in normalized_candidates
+        for alias_norm in (re.sub(r"[^a-z0-9]", "", alias.strip().lower()) for alias in aliases)
+    )
+
+
+def _looks_like_vm_inventory_document(document: dict[str, Any]) -> bool:
+    columns = [str(column) for column in document.get("columns", [])]
+    score = 0
+    if _document_has_any_column(columns, VM_NAME_COLUMNS):
+        score += 1
+    if _document_has_any_column(columns, CPU_COLUMNS):
+        score += 1
+    if _document_has_any_column(columns, MEMORY_GIB_COLUMNS + MEMORY_MIB_COLUMNS):
+        score += 1
+    if _document_has_any_column(columns, STORAGE_GIB_COLUMNS + STORAGE_MIB_COLUMNS):
+        score += 1
+    return score >= 3
+
+
+def _inventory_spec_columns(columns: list[str]) -> list[str]:
+    ordered_aliases = (
+        CPU_COLUMNS
+        + MEMORY_GIB_COLUMNS
+        + MEMORY_MIB_COLUMNS
+        + STORAGE_GIB_COLUMNS
+        + STORAGE_MIB_COLUMNS
+        + OS_COLUMNS
+    )
+    selected: list[str] = []
+    for alias in ordered_aliases:
+        match = _pick_column(columns, [alias])
+        if match and match not in selected:
+            selected.append(match)
+    return selected
+
+
+def _inventory_value(row: dict[str, Any], aliases: list[str]) -> Any:
+    keys = [str(key) for key in row.keys()]
+    for alias in aliases:
+        normalized_alias = re.sub(r"[^a-z0-9]", "", alias.strip().lower())
+        for key in keys:
+            candidates = [key.strip().lower(), key.strip().lower().split(".")[-1]]
+            normalized_candidates = {re.sub(r"[^a-z0-9]", "", item) for item in candidates}
+            if normalized_alias in normalized_candidates:
+                return row.get(key)
+    return None
+
+
+def _build_inventory_compute_spec(row: dict[str, Any]) -> ComputeSpec | None:
+    cpu = _to_float(_inventory_value(row, CPU_COLUMNS))
+    memory = _to_float(_inventory_value(row, MEMORY_GIB_COLUMNS))
+    if memory is None:
+        memory_raw = _to_float(_inventory_value(row, MEMORY_MIB_COLUMNS))
+        memory = memory_raw / 1024 if memory_raw and memory_raw > 512 else memory_raw
+    sku = str(_inventory_value(row, ["Tipo", "Type", "Instance Type"]) or "").strip() or None
+    if cpu is None and memory is None and not sku:
+        return None
+    return ComputeSpec(vcpu=int(cpu) if cpu else None, memory_gib=memory, sku=sku)
 
 
 def _strip_sep_header(text: str) -> tuple[str, bool]:
@@ -2342,8 +2533,12 @@ def _maas_understanding(parsed_documents: list[dict[str, Any]], quote_context: F
                 )
                 response.raise_for_status()
                 payload = response.json()
-                content = payload["choices"][0]["message"]["content"]
-                parsed = json.loads(content)
+                choices = payload.get("choices") or []
+                if not choices:
+                    raise ValueError("MaaS returned no choices")
+                message = choices[0].get("message") or {}
+                parsed = _parse_llm_json_content(message.get("content"))
+                parsed["schema_mapping"] = _sanitize_schema_mapping_payload(parsed.get("schema_mapping", {}))
                 FlexibleSchemaMapping.model_validate(parsed.get("schema_mapping", {}))
                 parsed["_llm_model"] = model
                 parsed["_llm_attempts"] = attempt
@@ -2368,24 +2563,38 @@ def understand_input(state: FlexibleQuoteState) -> FlexibleQuoteState:
     _report_progress(state, "understand_input", "running", "Understanding input schema.")
     parsed = state.get("parsed_documents", [])
     quote_context = FlexibleQuoteContext.model_validate(state.get("quote_context", {}))
-    llm_output = _maas_understanding(parsed, quote_context)
+    fallback_error: str | None = None
+    try:
+        llm_output = _maas_understanding(parsed, quote_context)
+        llm_used = True
+    except FlexibleWorkflowError as exc:
+        fallback_error = exc.detail or str(exc)
+        logger.warning("Falling back to heuristic schema understanding: %s", fallback_error)
+        llm_output = _build_heuristic_schema_understanding(parsed)
+        llm_used = False
     inferred_profile = _infer_input_profile(parsed)
     profile = _coerce_input_profile(llm_output.get("profile"), inferred_profile)
     if inferred_profile.quote_purpose == "unit_price_comparison" and profile.quote_purpose in {"unknown", "purchase_quote"}:
         profile = inferred_profile
     understanding = {
         "profile": profile.model_dump(),
-        "schema_mapping": FlexibleSchemaMapping.model_validate(llm_output.get("schema_mapping", {})).model_dump(),
+        "schema_mapping": FlexibleSchemaMapping.model_validate(
+            _sanitize_schema_mapping_payload(llm_output.get("schema_mapping", {}))
+        ).model_dump(),
         "extraction_hints": llm_output.get("extraction_hints", {}),
     }
-    message = f"Used MaaS schema understanding ({profile.quote_purpose})."
+    message = (
+        f"Used MaaS schema understanding ({profile.quote_purpose})."
+        if llm_used
+        else f"Used heuristic schema fallback ({profile.quote_purpose})."
+    )
     _report_progress(state, "understand_input", "completed", message)
     diagnostics = _update_diagnostics(
         state,
-        llm_used=True,
+        llm_used=llm_used,
         llm_model=llm_output.get("_llm_model"),
         llm_attempts=llm_output.get("_llm_attempts", 1),
-        llm_error=None,
+        llm_error=None if llm_used else fallback_error,
         input_profile=profile,
     )
     return {
@@ -2464,13 +2673,17 @@ def extract_requirement_items(state: FlexibleQuoteState) -> FlexibleQuoteState:
     requirements: list[dict[str, Any]] = []
     diagnostics = _diagnostics(state)
     document_diagnostics: list[FlexibleDocumentDiagnostic] = []
+    quote_context = FlexibleQuoteContext.model_validate(state.get("quote_context", {}))
     for document in parsed_documents:
+        is_inventory_like = _looks_like_vm_inventory_document(document)
         product_column = _prefer_huawei_column(
             document["columns"],
             document["rows"],
             _resolve_selected_column(document["columns"], understanding.product, "product"),
             "product",
         )
+        if is_inventory_like and _column_matches_aliases(product_column, VM_NAME_COLUMNS):
+            product_column = None
         quantity_column = _prefer_huawei_column(
             document["columns"],
             document["rows"],
@@ -2495,31 +2708,58 @@ def extract_requirement_items(state: FlexibleQuoteState) -> FlexibleQuoteState:
             _resolve_selected_column(document["columns"], understanding.notes, "notes"),
             "notes",
         )
+        spec_columns = _resolve_selected_columns(document["columns"], understanding.spec, "spec")
+        if is_inventory_like and not spec_columns:
+            spec_columns = _inventory_spec_columns(document["columns"])
         extracted_rows = 0
         candidate_rows = 0
         for index, row in enumerate(document["rows"], start=1):
             raw_product = str(row.get(product_column, "") if product_column else "").strip()
+            synthesized_inventory_row = False
+            if not raw_product and is_inventory_like:
+                raw_product = "ECS"
+                synthesized_inventory_row = True
             if not raw_product:
                 continue
             candidate_rows += 1
+            spec_text = _join_columns_as_spec(row, spec_columns) if spec_columns else (
+                str(row.get(spec_column, "")) if spec_column else ""
+            )
+            quantity = _to_float(row.get(quantity_column)) if quantity_column else None
+            quantity_source = "source_file" if quantity_column and quantity is not None else None
+            if quantity is None and synthesized_inventory_row:
+                quantity = 1
+                quantity_source = "source_file"
+            note_prefix = None
+            if synthesized_inventory_row:
+                note_prefix = "Inventory-style row inferred as ECS from CPU/memory/storage columns."
+            inventory_spec = _build_inventory_compute_spec(row) if synthesized_inventory_row else None
             requirement = RequirementItem(
                 item_id=f"{document['filename']}::{document['sheet']}::{index}",
                 source_file=document["filename"],
                 source_sheet=document["sheet"],
                 row_number=int(row.get("_line_number", index)),
                 raw_product_name=raw_product,
-                quantity=_to_float(row.get(quantity_column)) if quantity_column else None,
-                quantity_source="source_file" if quantity_column and _to_float(row.get(quantity_column)) is not None else None,
+                quantity=quantity,
+                quantity_source=quantity_source,
                 unit="item",
-                region=_normalize_region(str(row.get(region_column, ""))) if region_column else None,
-                spec=_parse_spec_text(None, str(row.get(spec_column, ""))) if spec_column else None,
-                notes=str(row.get(notes_column, "")).strip() if notes_column else None,
+                region=(
+                    _normalize_region(str(row.get(region_column, "")))
+                    if region_column else (quote_context.region if synthesized_inventory_row else None)
+                ),
+                spec=(
+                    inventory_spec
+                    or (_parse_spec_text("ECS" if synthesized_inventory_row else None, spec_text) if spec_text else None)
+                ),
+                notes=_append_note(str(row.get(notes_column, "")).strip() if notes_column else None, note_prefix),
             )
             requirements.append(requirement.model_dump())
             extracted_rows += 1
         reason = None
         if not product_column:
             reason = "No product column could be identified."
+            if is_inventory_like and extracted_rows > 0:
+                reason = "Inventory-style rows were inferred as ECS from CPU/memory/storage columns."
         elif candidate_rows == 0:
             reason = "Product column was mapped, but every row was empty."
         document_diagnostics.append(
@@ -2532,7 +2772,7 @@ def extract_requirement_items(state: FlexibleQuoteState) -> FlexibleQuoteState:
                     "product": product_column,
                     "quantity": quantity_column,
                     "region": region_column,
-                    "spec": spec_column,
+                    "spec": spec_columns[0] if len(spec_columns) == 1 else ",".join(spec_columns) if spec_columns else spec_column,
                     "notes": notes_column,
                 },
                 candidate_rows=candidate_rows,
@@ -2590,13 +2830,17 @@ def extract_others_requirement_items(state: FlexibleQuoteState) -> FlexibleQuote
     requirements: list[dict[str, Any]] = []
     diagnostics = _diagnostics(state)
     document_diagnostics: list[FlexibleDocumentDiagnostic] = []
+    quote_context = FlexibleQuoteContext.model_validate(state.get("quote_context", {}))
     for document in parsed_documents:
+        is_inventory_like = _looks_like_vm_inventory_document(document)
         product_column = _prefer_huawei_column(
             document["columns"],
             document["rows"],
             _resolve_selected_column(document["columns"], understanding.product, "product"),
             "product",
         )
+        if is_inventory_like and _column_matches_aliases(product_column, VM_NAME_COLUMNS):
+            product_column = None
         quantity_column = _prefer_huawei_column(
             document["columns"],
             document["rows"],
@@ -2621,31 +2865,58 @@ def extract_others_requirement_items(state: FlexibleQuoteState) -> FlexibleQuote
             _resolve_selected_column(document["columns"], understanding.notes, "notes"),
             "notes",
         )
+        spec_columns = _resolve_selected_columns(document["columns"], understanding.spec, "spec")
+        if is_inventory_like and not spec_columns:
+            spec_columns = _inventory_spec_columns(document["columns"])
         extracted_rows = 0
         candidate_rows = 0
         for index, row in enumerate(document["rows"], start=1):
             raw_product = str(row.get(product_column, "") if product_column else "").strip()
+            synthesized_inventory_row = False
+            if not raw_product and is_inventory_like:
+                raw_product = "ECS"
+                synthesized_inventory_row = True
             if not raw_product:
                 continue
             candidate_rows += 1
+            spec_text = _join_columns_as_spec(row, spec_columns) if spec_columns else (
+                str(row.get(spec_column, "")) if spec_column else ""
+            )
+            quantity = _to_float(row.get(quantity_column)) if quantity_column else None
+            quantity_source = "source_file" if quantity_column and quantity is not None else None
+            if quantity is None and synthesized_inventory_row:
+                quantity = 1
+                quantity_source = "source_file"
+            note_prefix = None
+            if synthesized_inventory_row:
+                note_prefix = "Inventory-style row inferred as ECS from CPU/memory/storage columns."
+            inventory_spec = _build_inventory_compute_spec(row) if synthesized_inventory_row else None
             requirement = RequirementItem(
                 item_id=f"{document['filename']}::{document['sheet']}::{index}",
                 source_file=document["filename"],
                 source_sheet=document["sheet"],
                 row_number=int(row.get("_line_number", index)),
                 raw_product_name=raw_product,
-                quantity=_to_float(row.get(quantity_column)) if quantity_column else None,
-                quantity_source="source_file" if quantity_column and _to_float(row.get(quantity_column)) is not None else None,
+                quantity=quantity,
+                quantity_source=quantity_source,
                 unit="item",
-                region=_normalize_region(str(row.get(region_column, ""))) if region_column else None,
-                spec=_parse_spec_text(None, str(row.get(spec_column, ""))) if spec_column else None,
-                notes=str(row.get(notes_column, "")).strip() if notes_column else None,
+                region=(
+                    _normalize_region(str(row.get(region_column, "")))
+                    if region_column else (quote_context.region if synthesized_inventory_row else None)
+                ),
+                spec=(
+                    inventory_spec
+                    or (_parse_spec_text("ECS" if synthesized_inventory_row else None, spec_text) if spec_text else None)
+                ),
+                notes=_append_note(str(row.get(notes_column, "")).strip() if notes_column else None, note_prefix),
             )
             requirements.append(requirement.model_dump())
             extracted_rows += 1
         reason = None
         if not product_column:
             reason = "No product column could be identified."
+            if is_inventory_like and extracted_rows > 0:
+                reason = "Inventory-style rows were inferred as ECS from CPU/memory/storage columns."
         elif candidate_rows == 0:
             reason = "Product column was mapped, but every row was empty."
         document_diagnostics.append(
@@ -2658,7 +2929,7 @@ def extract_others_requirement_items(state: FlexibleQuoteState) -> FlexibleQuote
                     "product": product_column,
                     "quantity": quantity_column,
                     "region": region_column,
-                    "spec": spec_column,
+                    "spec": spec_columns[0] if len(spec_columns) == 1 else ",".join(spec_columns) if spec_columns else spec_column,
                     "notes": notes_column,
                 },
                 candidate_rows=candidate_rows,
@@ -2708,7 +2979,11 @@ def normalize_others_requirements(state: FlexibleQuoteState) -> FlexibleQuoteSta
         if isinstance(spec, dict):
             spec = _parse_spec_text(product, spec.get("description") or spec.get("tier") or spec.get("sku"))
         elif spec:
-            spec = _parse_spec_text(product, " ".join(str(value) for value in spec.model_dump().values() if value))
+            spec_data = spec.model_dump()
+            if product == "ECS" and (spec_data.get("vcpu") or spec_data.get("memory_gib")):
+                spec = spec
+            else:
+                spec = _parse_spec_text(product, " ".join(str(value) for value in spec_data.values() if value))
         normalized.append(
             requirement.model_copy(
                 update={
@@ -3262,7 +3537,11 @@ def normalize_requirements(state: FlexibleQuoteState) -> FlexibleQuoteState:
             if isinstance(spec, dict):
                 spec = _parse_spec_text(product, spec.get("description") or spec.get("tier") or spec.get("sku"))
             elif spec:
-                spec = _parse_spec_text(product, " ".join(str(value) for value in spec.model_dump().values() if value))
+                spec_data = spec.model_dump()
+                if product == "ECS" and (spec_data.get("vcpu") or spec_data.get("memory_gib")):
+                    spec = spec
+                else:
+                    spec = _parse_spec_text(product, " ".join(str(value) for value in spec_data.values() if value))
         normalized.append(
             requirement.model_copy(
                 update={
@@ -7352,6 +7631,208 @@ def _export_flexible_billing_template_workbook(state: FlexibleQuoteState) -> Quo
     return QuoteWorkbook(filename=filename, content=output.getvalue())
 
 
+def _inventory_row_lookup(state: FlexibleQuoteState) -> dict[tuple[str, str | None, int], dict[str, Any]]:
+    lookup: dict[tuple[str, str | None, int], dict[str, Any]] = {}
+    for document in state.get("parsed_documents", []):
+        if not _looks_like_vm_inventory_document(document):
+            continue
+        filename = document.get("filename", "")
+        sheet = document.get("sheet")
+        for row in document.get("rows", []):
+            line_number_raw = row.get("_line_number")
+            try:
+                line_number = int(line_number_raw)
+            except (TypeError, ValueError):
+                continue
+            lookup[(filename, sheet, line_number)] = row
+    return lookup
+
+
+def _inventory_disk_gib(row: dict[str, Any] | None) -> float:
+    if not row:
+        return 0.0
+    disk_gib = _to_float(_inventory_value(row, STORAGE_GIB_COLUMNS))
+    if disk_gib is not None:
+        return round(disk_gib, 2)
+    disk_mib = _to_float(_inventory_value(row, STORAGE_MIB_COLUMNS))
+    if disk_mib is not None:
+        return round(disk_mib / 1024, 2)
+    return 0.0
+
+
+def _inventory_raw_memory_mb(row: dict[str, Any] | None, spec: ComputeSpec | None) -> float | None:
+    if row:
+        memory_mb = _to_float(_inventory_value(row, MEMORY_MIB_COLUMNS))
+        if memory_mb is not None:
+            return memory_mb
+    if spec and spec.memory_gib is not None:
+        return round(spec.memory_gib * 1024, 2)
+    return None
+
+
+def _inventory_raw_storage_mib(row: dict[str, Any] | None, disk_gib: float) -> float | None:
+    if row:
+        storage_mib = _to_float(_inventory_value(row, STORAGE_MIB_COLUMNS))
+        if storage_mib is not None:
+            return storage_mib
+    if disk_gib > 0:
+        return round(disk_gib * 1024, 2)
+    return None
+
+
+def _inventory_review_reason(
+    requirement: RequirementItem,
+    blocker_by_item: dict[str, dict[str, Any]],
+    unquoted_by_item: dict[str, dict[str, Any]],
+) -> str | None:
+    blocker = blocker_by_item.get(requirement.item_id)
+    if blocker:
+        return str(blocker.get("message") or requirement.status_reason or "").strip() or None
+    unquoted = unquoted_by_item.get(requirement.item_id)
+    if unquoted:
+        return str(unquoted.get("reason") or requirement.status_reason or "No matched price was found.").strip() or None
+    return requirement.status_reason
+
+
+def _build_inventory_template_quote_lines(state: FlexibleQuoteState) -> list[dict[str, Any]]:
+    from app.models import QuoteLine
+
+    row_lookup = _inventory_row_lookup(state)
+    quote_lines_by_item: dict[str, list[FlexibleQuoteLine]] = {}
+    for raw_line in state.get("quote_lines", []):
+        line = FlexibleQuoteLine.model_validate(raw_line)
+        quote_lines_by_item.setdefault(line.requirement_item_id, []).append(line)
+
+    blocker_by_item = {
+        item.get("item_id", ""): item
+        for item in state.get("quote_blockers", [])
+        if item.get("item_id")
+    }
+    unquoted_by_item = {
+        item.get("item_id", ""): item
+        for item in state.get("unquoted_items", [])
+        if item.get("item_id")
+    }
+
+    template_lines: list[dict[str, Any]] = []
+    for raw_requirement in state.get("requirements", []):
+        requirement = RequirementItem.model_validate(raw_requirement)
+        if requirement.normalized_product != "ECS":
+            continue
+        spec = requirement.spec if isinstance(requirement.spec, ComputeSpec) else None
+        row = row_lookup.get((requirement.source_file, requirement.source_sheet, requirement.row_number or 0))
+        vm_name = str(_inventory_value(row, VM_NAME_COLUMNS) or requirement.raw_product_name or requirement.item_id).strip()
+        os_name = str(_inventory_value(row, OS_COLUMNS) or "").strip()
+        disk_gib = _inventory_disk_gib(row)
+        raw_memory_mb = _inventory_raw_memory_mb(row, spec)
+        raw_storage_mib = _inventory_raw_storage_mib(row, disk_gib)
+        quoted_lines = quote_lines_by_item.get(requirement.item_id, [])
+        quoted_line = quoted_lines[0] if quoted_lines else None
+        monthly_price = round(sum(line.monthly_price for line in quoted_lines), 4)
+        action = "quote" if quoted_line else "manual_review"
+        template_lines.append(
+            QuoteLine(
+                vm_name=vm_name,
+                power_state="",
+                os=os_name,
+                vcpu=spec.vcpu or 0 if spec else 0,
+                memory_gib=spec.memory_gib or 0 if spec and spec.memory_gib is not None else 0,
+                disk_gib=disk_gib,
+                customer=None,
+                workload_type=None,
+                source_sheet=requirement.source_sheet,
+                source_dc=requirement.source_sheet,
+                raw_memory_mb=raw_memory_mb,
+                raw_storage_mib=raw_storage_mib,
+                workload_category=None,
+                storage_class_hint="general-purpose-ssd" if disk_gib > 0 else None,
+                license_hint=None,
+                ecs_family_hint=None,
+                classification_confidence=None,
+                classification_rationale=None,
+                review_flags=[],
+                action=action,
+                review_reason=None if quoted_line else _inventory_review_reason(requirement, blocker_by_item, unquoted_by_item),
+                region=requirement.region or "mexico",
+                evs_type="gpssd",
+                ecs_category=None,
+                ecs_family_label=None,
+                ecs_spec=quoted_line.matched_sku if quoted_line else (spec.sku if spec else None),
+                ecs_vcpu=spec.vcpu if spec else None,
+                ecs_mem=spec.memory_gib if spec else None,
+                ecs_ondemand_monthly_usd=monthly_price if quoted_line else 0,
+                ecs_ri_1y_monthly_usd=monthly_price if quoted_line else 0,
+                evs_monthly_usd=0,
+                total_ondemand_monthly_usd=monthly_price if quoted_line else 0,
+                total_ri_1y_monthly_usd=monthly_price if quoted_line else 0,
+                evs_selected_type="gpssd",
+                evs_selected_label="General Purpose SSD",
+                ecs_family_policy=None,
+            ).model_dump()
+        )
+    return template_lines
+
+
+def _should_use_inventory_template_export(state: FlexibleQuoteState) -> bool:
+    if state.get("mapped_billing_resources") or state.get("billing_lines"):
+        return False
+    if any(_looks_like_vm_inventory_document(document) for document in state.get("parsed_documents", [])):
+        return True
+    requirements = [RequirementItem.model_validate(item) for item in state.get("requirements", [])]
+    if not requirements:
+        return False
+    ecs_requirements = [
+        requirement
+        for requirement in requirements
+        if requirement.normalized_product == "ECS" and isinstance(requirement.spec, ComputeSpec)
+    ]
+    return len(ecs_requirements) == len(requirements)
+
+
+def _export_inventory_template_workbook(state: FlexibleQuoteState) -> QuoteWorkbook:
+    from app.models import QuoteRequest, QuoteSummary
+    from app.workflow import export_excel
+
+    template_lines = _build_inventory_template_quote_lines(state)
+    quote_context = FlexibleQuoteContext.model_validate(state.get("quote_context", {}))
+    source_files = sorted({item.get("source_file", "") for item in state.get("requirements", []) if item.get("source_file")})
+    source_filename = source_files[0] if source_files else "inventory.xlsx"
+    quoted_lines = [item for item in template_lines if item.get("action") == "quote"]
+    manual_lines = [item for item in template_lines if item.get("action") == "manual_review"]
+    total_disk = round(sum(_billing_safe_number(item.get("disk_gib")) for item in template_lines), 2)
+    total_price = round(sum(_billing_safe_number(item.get("total_ondemand_monthly_usd")) for item in quoted_lines), 2)
+    summary = QuoteSummary(
+        total_vms=len(template_lines),
+        excluded_vms=0,
+        manual_review_vms=len(manual_lines),
+        quoted_vms=len(quoted_lines),
+        total_disk_gib=total_disk,
+        total_ondemand_monthly_usd=total_price,
+        total_ri_1y_monthly_usd=total_price,
+        summary="Inventory-style Others quote exported with the RVTools template layout.",
+        assumptions=[
+            "Inventory-style Others input was normalized into ECS template rows.",
+        ],
+        risks=["Some non-ECS components may require manual review."] if manual_lines else [],
+    )
+    request = QuoteRequest(
+        region=quote_context.region or "mexico",
+        evs_type="gpssd",
+        lang=quote_context.language,
+        source_filename=source_filename,
+    )
+    result = export_excel(
+        {
+            "summary": summary.model_dump(),
+            "request": request.model_dump(),
+            "quote_lines": template_lines,
+            "source_filenames": source_files or [source_filename],
+            "pricebook": {},
+        }
+    )
+    return QuoteWorkbook.model_validate(result["workbook"])
+
+
 def export_flexible_workbook(state: FlexibleQuoteState) -> FlexibleQuoteState:
     """Export flexible quote workbook.
 
@@ -7361,6 +7842,9 @@ def export_flexible_workbook(state: FlexibleQuoteState) -> FlexibleQuoteState:
     is_billing = bool(state.get("mapped_billing_resources") or state.get("billing_lines"))
     if is_billing:
         wb = _export_flexible_billing_template_workbook(state)
+        return {"workbook": wb}
+    if _should_use_inventory_template_export(state):
+        wb = _export_inventory_template_workbook(state)
         return {"workbook": wb}
 
     # Original generic export

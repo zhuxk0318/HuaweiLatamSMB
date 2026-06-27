@@ -450,7 +450,7 @@ a {
 
 .solution-domain-entry-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -570,7 +570,7 @@ a {
 
 .playbook-entry-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -661,6 +661,59 @@ a {
 .scenario-section {
   display: grid;
   gap: 18px;
+}
+
+.skill-category-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: var(--shadow);
+}
+
+.skill-category-filter button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid #d8dde7;
+  border-radius: 999px;
+  background: #f7f8fa;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
+}
+
+.skill-category-filter button:hover {
+  border-color: rgba(199, 0, 11, 0.38);
+  color: var(--red-dark);
+}
+
+.skill-category-filter button.active {
+  border-color: var(--red);
+  background: var(--red);
+  color: #ffffff;
+}
+
+.skill-category-filter button span {
+  display: inline-grid;
+  min-width: 22px;
+  min-height: 22px;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(12, 16, 24, 0.08);
+  font-size: 0.74rem;
+}
+
+.skill-category-filter button.active span {
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .scenario-grid {
@@ -1779,27 +1832,31 @@ a {
 .segmented-control button {
   min-height: 62px;
   padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #f8fafc;
+  border: 2px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
   color: var(--text);
   cursor: pointer;
   font-weight: 650;
   text-align: left;
-  transition: background 180ms ease, border-color 180ms ease, color 180ms ease, box-shadow 180ms ease;
+  transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
 }
 
 .segmented-control button.active {
   border-color: #c41e3a;
-  background: #ffffff;
+  background: #fef2f2;
   color: var(--ink);
-  box-shadow: inset 3px 0 0 var(--red), 0 2px 8px rgba(196, 30, 58, 0.1);
+  box-shadow: 0 2px 8px rgba(196, 30, 58, 0.12);
   font-weight: 750;
 }
 
-.segmented-control button:hover {
-  border-color: #cfd5df;
-  background: #ffffff;
+.segmented-control button:hover:not(:disabled) {
+  border-color: #c41e3a;
+}
+
+.segmented-control button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .segmented-control span {

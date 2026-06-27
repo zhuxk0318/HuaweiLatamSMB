@@ -19,10 +19,12 @@ from app.flexible_pricing import load_flexible_pricing_catalog, query_flexible_p
 from app.flexible_workflow import (
     build_flexible_preview_response,
     build_flexible_review_state,
+    export_flexible_workbook,
     flexible_export_graph,
     flexible_preview_graph,
     flexible_review_graph,
 )
+from app.others_quote_workflow import others_preview_graph
 from app.main import (
     create_flexible_annotate_task,
     create_flexible_preview_task,
@@ -57,6 +59,7 @@ from app.workflow import (
     _build_ecs_export_rows,
     _build_hwc_rows,
 )
+from app.cloud_billing_workflow import extract_cloud_billing_requirement_items
 from app.rvtools_preview_tasks import store_preview_result, get_preview_state, _tasks as _rvtools_tasks, _lock as _rvtools_lock
 
 
@@ -101,6 +104,19 @@ def make_multi_header_flexible_xlsx(*, include_quantity: bool = True, blank_huaw
         ]
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
         pd.DataFrame(rows).to_excel(writer, sheet_name="计算", index=False, header=False)
+    return buffer.getvalue()
+
+
+def make_inventory_style_flexible_xlsx() -> bytes:
+    buffer = BytesIO()
+    workbook = Workbook()
+    ws = workbook.active
+    ws.title = "ECS"
+    ws.append(["Origen", "", "", "", "", ""])
+    ws.append(["Equipo", "CPU", "Mem", "Tipo", "HD", "Sistema Operativo"])
+    ws.append(["Server_1", 4, 32, "x86_64", "250 GiB", "Ubuntu 18"])
+    ws.append(["Server_2", 2, 16, "x86_64", "100 GiB", "Windows 10 Pro"])
+    workbook.save(buffer)
     return buffer.getvalue()
 
 
@@ -266,6 +282,33 @@ def fake_unit_price_profile_product_schema_mapping(*_: object, **__: object) -> 
             "region": "region",
             "spec": "spec",
             "notes": None,
+        },
+        "extraction_hints": {},
+        "_llm_model": "test-model",
+        "_llm_attempts": 1,
+    }
+
+
+def fake_inventory_schema_mapping(*_: object, **__: object) -> dict[str, object]:
+    return {
+        "schema_mapping": {
+            "product": "Equipo",
+            "quantity": None,
+            "region": None,
+            "spec": {
+                "os": "Sistema Operativo",
+                "cpu": "CPU",
+                "memory": "Mem",
+                "disk": "HD",
+                "type": "Tipo",
+            },
+            "notes": None,
+        },
+        "profile": {
+            "quote_purpose": "purchase_quote",
+            "quantity_policy": "required",
+            "confidence": 0.85,
+            "rationale": "Inventory-like VM sheet.",
         },
         "extraction_hints": {},
         "_llm_model": "test-model",
@@ -498,6 +541,44 @@ def test_flexible_preview_falls_back_when_huawei_product_column_is_empty(monkeyp
     assert payload.quote_lines
 
 
+def test_flexible_preview_handles_inventory_style_vm_sheet(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(flexible_workflow_mod, "_maas_understanding", fake_inventory_schema_mapping)
+    content = make_inventory_style_flexible_xlsx()
+
+    state = flexible_preview_graph.invoke(
+        {
+            "files": [{"filename": "inventory.xlsx", "content": content}],
+            "quote_context": {"region": "mexico", "language": "es", "customer_notes": ""},
+        }
+    )
+    payload = build_flexible_preview_response(state)
+
+    assert payload.requirements
+    assert payload.requirements[0].raw_product_name == "ECS"
+    assert payload.requirements[0].quantity >= 1
+    assert payload.requirements[0].quantity_source == "source_file"
+    assert payload.requirements[0].region == "mexico"
+    assert payload.quote_lines
+
+
+def test_others_inventory_export_uses_rvtools_template(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(flexible_workflow_mod, "_maas_understanding", fake_inventory_schema_mapping)
+    content = make_inventory_style_flexible_xlsx()
+
+    preview_state = others_preview_graph.invoke(
+        {
+            "files": [{"filename": "inventory.xlsx", "content": content}],
+            "quote_context": {"region": "mexico", "language": "es", "customer_notes": "", "quote_mode": "others"},
+        }
+    )
+    export_result = export_flexible_workbook(preview_state)
+    workbook = load_workbook(BytesIO(export_result["workbook"].content))
+
+    assert workbook.sheetnames[:4] == ["Summary", "HWC", "ECS", "Información"]
+    assert "Standard Requirements" not in workbook.sheetnames
+    assert workbook["ECS"]["A3"].value == "Server_1"
+
+
 def test_flexible_review_applies_feedback_and_unlocks_quote(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(flexible_workflow_mod, "_maas_understanding", fake_schema_mapping)
     content = make_flexible_xlsx(
@@ -712,7 +793,7 @@ def test_flexible_preview_fails_when_no_requirements_are_extracted(monkeypatch: 
     assert "No recognizable requirement rows" in (final.error.detail or "")
 
 
-def test_flexible_preview_fails_when_llm_understanding_fails(monkeypatch: pytest.MonkeyPatch):
+def test_flexible_preview_falls_back_to_heuristic_when_llm_understanding_fails(monkeypatch: pytest.MonkeyPatch):
     def _raise_llm(*_args: object, **_kwargs: object) -> dict[str, object]:
         raise flexible_workflow_mod.FlexibleWorkflowError(
             "Flexible preview failed during LLM schema understanding.",
@@ -738,10 +819,26 @@ def test_flexible_preview_fails_when_llm_understanding_fails(monkeypatch: pytest
         time.sleep(0.05)
 
     assert final is not None
-    assert final.status == "failed"
-    assert final.error is not None
-    assert final.error.last_stage == "understand_input"
-    assert "timeout" in (final.error.detail or "")
+    assert final.status == "succeeded"
+    assert final.result is not None
+    assert final.result.requirements
+    assert final.result.diagnostics.llm_used is False
+    assert "timeout" in (final.result.diagnostics.llm_error or "")
+
+
+def test_cloud_billing_extract_does_not_require_understanding():
+    ingested = flexible_workflow_mod.ingest_files(
+        {
+            "files": [{"filename": "billing.xlsx", "content": make_billing_quote_workbook()}],
+            "quote_context": {"region": "mexico", "language": "en", "customer_notes": ""},
+        }
+    )
+    parsed = flexible_workflow_mod.parse_documents(ingested)
+    result = extract_cloud_billing_requirement_items(parsed)
+
+    assert result["requirements"]
+    assert result["billing_lines"]
+    assert result["llm_aggregated_billing_items"]
 
 
 def test_row_quote_workflow_only_processes_first_sheet(monkeypatch: pytest.MonkeyPatch):
@@ -3283,8 +3380,8 @@ def test_parse_rvtools_inventory_sheet_selected_by_sheet_selection():
     assert parsed[0].source_sheet == "filtrado"
 
 
-def test_parse_rvtools_inventory_sheet_missing_storage_rejected():
-    """A sheet with VM/CPU/Memory but no Storage column is not inventory-like and should error."""
+def test_parse_rvtools_inventory_sheet_missing_storage_defaults_to_zero():
+    """A VM inventory with VM/CPU/Memory but no Storage column is still usable."""
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
         pd.DataFrame([
@@ -3292,8 +3389,31 @@ def test_parse_rvtools_inventory_sheet_missing_storage_rejected():
         ]).to_excel(writer, sheet_name="partial", index=False)
     content = buffer.getvalue()
 
-    with pytest.raises(RvToolsParseError, match="inventory-like"):
+    parsed, info_rows, disk_rows = parse_rvtools_workbook(content)
+
+    assert len(parsed) == 1
+    assert parsed[0].vm_name == "vm-1"
+    assert parsed[0].vcpu == 2
+    assert parsed[0].memory_gib == 4
+    assert parsed[0].disk_gib == 0
+    assert disk_rows == []
+
+
+def test_parse_rvtools_inventory_error_includes_scanned_columns():
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+        pd.DataFrame([
+            {"Application": "crm", "Owner": "sales"},
+        ]).to_excel(writer, sheet_name="Apps", index=False)
+    content = buffer.getvalue()
+
+    with pytest.raises(RvToolsParseError) as exc_info:
         parse_rvtools_workbook(content)
+
+    detail = str(exc_info.value)
+    assert "VM/CPU/Memory" in detail
+    assert "Sheets scanned:" in detail
+    assert "Application" in detail
 
 
 def test_parse_rvtools_template_style_ecs_sheet_with_offset_header():
@@ -3319,6 +3439,66 @@ def test_parse_rvtools_template_style_ecs_sheet_with_offset_header():
     assert parsed[0].os == "Ubuntu 18"
     assert parsed[0].source_sheet == "ECS"
     assert info_rows[0]["Equipo"] == "Server_1"
+    assert disk_rows == []
+
+
+def test_parse_rvtools_flattened_inventory_headers_supported():
+    """Flattened group headers like Origen.Equipo should still be parsed as inventory-like."""
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+        pd.DataFrame(
+            [
+                {
+                    "Origen.Equipo": "srv-01",
+                    "Origen.CPU": 4,
+                    "Origen.Mem": 32,
+                    "Origen.HD": "250 GiB",
+                    "Origen.Sistema Operativo": "Ubuntu 22.04",
+                }
+            ]
+        ).to_excel(writer, sheet_name="ECS", index=False)
+    content = buffer.getvalue()
+
+    parsed, info_rows, disk_rows = parse_rvtools_workbook(content)
+
+    assert len(parsed) == 1
+    assert parsed[0].vm_name == "srv-01"
+    assert parsed[0].vcpu == 4
+    assert parsed[0].memory_gib == 32
+    assert parsed[0].disk_gib == 250
+    assert parsed[0].os == "Ubuntu 22.04"
+    assert info_rows[0]["Origen.Equipo"] == "srv-01"
+    assert disk_rows == []
+
+
+def test_parse_rvtools_service_named_inventory_sheet_supported():
+    """Spanish inventory sheets may use Servicio as the VM/service identifier."""
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+        pd.DataFrame(
+            [
+                {
+                    "Servicio": "app-prod-01",
+                    "Sistema Operativo": "Ubuntu 22.04",
+                    "vCPU": 4,
+                    "RAM": 16,
+                    "Disco": "120 GB",
+                    "Tipo": "x86_64",
+                }
+            ]
+        ).to_excel(writer, sheet_name="Hoja1", index=False)
+    content = buffer.getvalue()
+
+    parsed, info_rows, disk_rows = parse_rvtools_workbook(content)
+
+    assert len(parsed) == 1
+    assert parsed[0].vm_name == "app-prod-01"
+    assert parsed[0].vcpu == 4
+    assert parsed[0].memory_gib == 16
+    assert parsed[0].disk_gib == 120
+    assert parsed[0].os == "Ubuntu 22.04"
+    assert parsed[0].source_sheet == "Hoja1"
+    assert info_rows[0]["Servicio"] == "app-prod-01"
     assert disk_rows == []
 
 

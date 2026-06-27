@@ -1293,6 +1293,15 @@ def parse_architecture_spec(llm_output: str) -> dict:
             if c["container_type"] == "subnet"
             and ("data" in c.get("label", "").lower() or "db" in c.get("label", "").lower())
         ]
+        frontend_subnet_ids = [
+            c["id"]
+            for c in containers
+            if c["container_type"] == "subnet"
+            and any(token in c.get("label", "").lower() for token in ("front", "public", "ingress", "dmz", "web"))
+        ]
+
+        ingress_products = {"cdn", "elb", "waf", "nat gateway", "nat", "apig", "vpn", "direct connect", "dc"}
+        ingress_labels = ("cdn", "elb", "waf", "nat", "api gateway", "apig", "vpn", "direct connect")
 
         # nodes: validate container_id, type, label
         if not spec["nodes"]:
@@ -1309,6 +1318,11 @@ def parse_architecture_spec(llm_output: str) -> dict:
             cid = node.get("container_id")
             product = (node.get("product") or "").lower()
             label_lower = node.get("label", "").lower()
+            is_ingress_node = (
+                node["type"] == "gateway"
+                or product in ingress_products
+                or any(token in label_lower for token in ingress_labels)
+            )
             if len(node.get("label", "")) > MAX_LABEL_LEN:
                 raise ValueError(f"Node {node['id']} label too long ({len(node.get('label', ''))} > {MAX_LABEL_LEN})")
 
@@ -1331,6 +1345,13 @@ def parse_architecture_spec(llm_output: str) -> dict:
                         )
                     else:
                         raise ValueError(f"Node {node['id']} missing container_id")
+                elif is_ingress_node and len(frontend_subnet_ids) == 1:
+                    node["container_id"] = frontend_subnet_ids[0]
+                    cid = node["container_id"]
+                    logger.warning(
+                        "Ingress/gateway node %s missing container_id — assigned to frontend subnet %s",
+                        node["id"], cid,
+                    )
                 else:
                     node["container_id"] = region_id
                     cid = region_id
@@ -1363,15 +1384,20 @@ def parse_architecture_spec(llm_output: str) -> dict:
             if not node.get("product"):
                 logger.warning("Node %s (type=%s) missing 'product' field — will use generic shape fallback", node["id"], node["type"])
 
-            ingress_products = {"cdn", "elb", "waf", "nat gateway", "nat", "apig", "vpn", "direct connect", "dc"}
-            ingress_labels = ("cdn", "elb", "waf", "nat", "api gateway", "apig", "vpn", "direct connect")
-            is_ingress_node = (
-                node["type"] == "gateway"
-                or product in ingress_products
-                or any(token in label_lower for token in ingress_labels)
-            )
             if is_ingress_node:
-                cur = container_by_id.get(cid)
+                container = container_by_id.get(cid)
+                if container and container["container_type"] in {"region", "vpc"} and len(frontend_subnet_ids) == 1:
+                    previous_container_type = container["container_type"]
+                    node["container_id"] = frontend_subnet_ids[0]
+                    cid = node["container_id"]
+                    container = container_by_id.get(cid)
+                    logger.warning(
+                        "Ingress/gateway node %s misplaced under %s — reassigned to frontend subnet %s",
+                        node["id"], previous_container_type,
+                        cid,
+                    )
+
+                cur = container
                 subnet_ancestor = None
                 while cur:
                     if cur["container_type"] == "subnet":

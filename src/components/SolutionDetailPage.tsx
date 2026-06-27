@@ -27,6 +27,7 @@ const labels = {
     salesTalkTrack: "Preguntas de venta",
     expectedOutcomes: "Resultados esperados",
     estimator: "Abrir cotizador cloud",
+    sourceSkill: "Abrir Skill en GitHub",
     overview: "Ver todos los escenarios",
   },
   en: {
@@ -46,6 +47,7 @@ const labels = {
     salesTalkTrack: "Sales talk track",
     expectedOutcomes: "Expected outcomes",
     estimator: "Open cloud estimator",
+    sourceSkill: "Open GitHub Skill",
     overview: "Browse all scenarios",
   },
   zh: {
@@ -65,6 +67,7 @@ const labels = {
     salesTalkTrack: "销售沟通问题",
     expectedOutcomes: "预期结果",
     estimator: "打开云报价器",
+    sourceSkill: "打开 GitHub Skill",
     overview: "浏览全部场景",
   },
   pg: {
@@ -84,6 +87,7 @@ const labels = {
     salesTalkTrack: "Sales talk track",
     expectedOutcomes: "Expected outcomes",
     estimator: "Open cloud estimator",
+    sourceSkill: "Open GitHub Skill",
     overview: "Browse all scenarios",
   },
 } satisfies Record<Lang, Record<string, string>>;
@@ -133,6 +137,8 @@ export function SolutionDetailPage({ lang, solutionId }: SolutionDetailPageProps
   }
 
   const entry = solutionEntries.find((item) => item.id === scenario.entryId) ?? solutionEntries[0];
+  const primarySkill = scenario.demoSkillLinks[0];
+  const isAiSkill = scenario.entryId === "ai-maas" && Boolean(scenario.categoryId && primarySkill);
 
   return (
     <main className="solution-detail-page">
@@ -170,30 +176,51 @@ export function SolutionDetailPage({ lang, solutionId }: SolutionDetailPageProps
           ))}
         </div>
         <div className="hero-actions">
-          <a
-            className="primary-action"
-            href="#/estimator"
-            onClick={() =>
-              trackClick({
-                click_target: "solution_detail_estimator",
-                click_section: "solution_detail_hero",
-                destination: "#/estimator",
-                entry_id: entry.id,
-                scenario_id: scenario.id,
-              })
-            }
-          >
-            {l.estimator}
-            <ArrowRight size={18} />
-          </a>
+          {isAiSkill && primarySkill ? (
+            <a
+              className="primary-action"
+              href={primarySkill.url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() =>
+                trackClick({
+                  click_target: "solution_detail_skill_primary",
+                  click_section: "solution_detail_hero",
+                  destination: primarySkill.url,
+                  entry_id: entry.id,
+                  scenario_id: scenario.id,
+                })
+              }
+            >
+              {l.sourceSkill}
+              <ExternalLink size={18} />
+            </a>
+          ) : (
+            <a
+              className="primary-action"
+              href="#/estimator"
+              onClick={() =>
+                trackClick({
+                  click_target: "solution_detail_estimator",
+                  click_section: "solution_detail_hero",
+                  destination: "#/estimator",
+                  entry_id: entry.id,
+                  scenario_id: scenario.id,
+                })
+              }
+            >
+              {l.estimator}
+              <ArrowRight size={18} />
+            </a>
+          )}
           <a
             className="secondary-action light"
-            href="#/solutions"
+            href={`#/solutions?entry=${entry.id}`}
             onClick={() =>
               trackClick({
                 click_target: "solution_detail_overview_cta",
                 click_section: "solution_detail_hero",
-                destination: "#/solutions",
+                destination: `#/solutions?entry=${entry.id}`,
                 entry_id: entry.id,
                 scenario_id: scenario.id,
               })

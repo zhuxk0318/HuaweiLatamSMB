@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { ArrowRight, ExternalLink } from "lucide-react";
 import { trackClick } from "../analytics";
 import type { Lang } from "../data/i18n";
@@ -109,7 +110,9 @@ function ScenarioCard({
       <img src={scenario.heroImage} alt="" loading="lazy" />
       <div className="scenario-card-body">
         <div className="scenario-card-heading">
-          <span className="scenario-entry-badge">{textFor(lang, scenarioEntry.title)}</span>
+          <span className="scenario-entry-badge">
+            {textFor(lang, scenario.categoryLabel ?? scenarioEntry.title)}
+          </span>
           {isExternal && <span className="external-link-badge"><ExternalLink size={12} /> {l.externalBadge}</span>}
         </div>
         <h3>{textFor(lang, scenario.title)}</h3>
@@ -207,6 +210,45 @@ export function SolutionExplorer({ lang, initialEntryId }: SolutionExplorerProps
   const l = labels[lang];
   const activeEntry = solutionEntries.find((entry) => entry.id === initialEntryId) ?? solutionEntries[0];
   const orderedScenarios = entryScenarios(activeEntry);
+  const [activeCategoryId, setActiveCategoryId] = useState("all");
+  const categoryOptions = orderedScenarios.filter(
+    (scenario, index, scenarios) =>
+      Boolean(scenario.categoryId && scenario.categoryLabel) &&
+      scenarios.findIndex((candidate) => candidate.categoryId === scenario.categoryId) === index,
+  );
+  const showCategoryFilters = activeEntry.id === "ai-maas" && categoryOptions.length > 1;
+  const visibleScenarios =
+    showCategoryFilters && activeCategoryId !== "all"
+      ? orderedScenarios.filter((scenario) => scenario.categoryId === activeCategoryId)
+      : orderedScenarios;
+  const allCategoriesLabel =
+    lang === "es"
+      ? "Todos los dominios"
+      : lang === "zh"
+        ? "全部领域"
+        : lang === "pg"
+          ? "Todos os domínios"
+          : "All domains";
+  const categoryFilterLabel =
+    lang === "es"
+      ? "Filtrar Skills por dominio"
+      : lang === "zh"
+        ? "按领域筛选 Skill"
+        : lang === "pg"
+          ? "Filtrar Skills por domínio"
+          : "Filter Skills by domain";
+  const aiSkillsBodyLabel =
+    lang === "es"
+      ? "Explore Skills reutilizables de Huawei Cloud y abra cada guía para revisar su valor, arquitectura, integración y código fuente."
+      : lang === "zh"
+        ? "浏览可复用的 Huawei Cloud Skill，并查看每项方案的价值、架构、集成方式和源码。"
+        : lang === "pg"
+          ? "Explore Skills reutilizáveis da Huawei Cloud e consulte valor, arquitetura, integração e código-fonte."
+          : "Explore reusable Huawei Cloud Skills and open each guide for its value, architecture, integration path, and source.";
+
+  useEffect(() => {
+    setActiveCategoryId("all");
+  }, [activeEntry.id]);
 
   return (
     <div className="solution-playbook">
@@ -296,13 +338,42 @@ export function SolutionExplorer({ lang, initialEntryId }: SolutionExplorerProps
       <section className="scenario-section">
         <div className="section-heading">
           <span className="section-kicker">
-            {orderedScenarios.length} {lang === "es" ? "escenarios" : lang === "zh" ? "个场景" : "scenarios"}
+            {visibleScenarios.length} {activeEntry.id === "ai-maas" ? "Skills" : lang === "es" ? "escenarios" : lang === "zh" ? "个场景" : "scenarios"}
           </span>
           <h3>{textFor(lang, activeEntry.title)}</h3>
-          <p>{l.allScenarios}</p>
+          <p>{activeEntry.id === "ai-maas" ? aiSkillsBodyLabel : l.allScenarios}</p>
         </div>
+        {showCategoryFilters && (
+          <div className="skill-category-filter" role="group" aria-label={categoryFilterLabel}>
+            <button
+              className={activeCategoryId === "all" ? "active" : ""}
+              type="button"
+              onClick={() => setActiveCategoryId("all")}
+            >
+              {allCategoriesLabel}
+              <span>{orderedScenarios.length}</span>
+            </button>
+            {categoryOptions.map((scenario) => {
+              const categoryId = scenario.categoryId!;
+              const categoryCount = orderedScenarios.filter(
+                (candidate) => candidate.categoryId === categoryId,
+              ).length;
+              return (
+                <button
+                  className={activeCategoryId === categoryId ? "active" : ""}
+                  type="button"
+                  key={categoryId}
+                  onClick={() => setActiveCategoryId(categoryId)}
+                >
+                  {textFor(lang, scenario.categoryLabel!)}
+                  <span>{categoryCount}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
         <div className="scenario-grid">
-          {orderedScenarios.map((scenario) => (
+          {visibleScenarios.map((scenario) => (
             <ScenarioCard lang={lang} scenario={scenario} activeEntry={activeEntry} key={scenario.id} />
           ))}
         </div>

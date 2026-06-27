@@ -1,4 +1,9 @@
 import type { Lang } from "./i18n";
+import {
+  aiSkillCategoryProfiles,
+  aiSkillDefinitions,
+  type AiSkillCategoryProfile,
+} from "./aiSkills";
 
 export type SolutionEntryId = "ai-maas" | "cloud-to-cloud" | "on-prem-to-cloud" | "enterprise";
 
@@ -23,6 +28,8 @@ export type QuickIntegration = {
 export type SolutionScenario = {
   id: string;
   entryId: SolutionEntryId;
+  categoryId?: string;
+  categoryLabel?: LocalizedPair;
   title: LocalizedPair;
   oneLiner: LocalizedPair;
   targetCustomers: LocalizedPair[];
@@ -75,16 +82,16 @@ export const solutionEntries: SolutionEntry[] = [
   {
     id: "ai-maas",
     title: {
-      en: "Build AI Assistants and Smarter Workflows",
-      es: "AI MaaS y aplicaciones inteligentes",
+      en: "AI Cloud Adoption Skills",
+      es: "Skills de adopción cloud para IA",
     },
     summary: {
-      en: "AI assistants for customer service, knowledge search, coding, and business analytics.",
-      es: "Lance asistentes de IA, flujos de AI Coding y casos de analítica con acceso a modelos por API y consumo de tokens medible.",
+      en: "Reusable Huawei Cloud patterns for agent platforms, AI applications, AI coding, governance, and migration.",
+      es: "Patrones reutilizables de Huawei Cloud para agentes, aplicaciones de IA, AI Coding, gobierno y migración.",
     },
-    tags: ["Customer Service", "Productivity", "Data Insights"],
-    heroImage: "/assets/huawei/hero-maas.jpg",
-    scenarioIds: ["ai-coding-agent", "customer-service-knowledge", "data-analytics-assistant"],
+    tags: ["18 Skills", "MaaS", "Agent & App Patterns"],
+    heroImage: "/assets/huawei/ai-skills/ai-connected-city.jpg",
+    scenarioIds: aiSkillDefinitions.map((skill) => skill.id),
   },
   {
     id: "cloud-to-cloud",
@@ -131,10 +138,50 @@ export const solutionEntries: SolutionEntry[] = [
 ];
 
 export const solutionEntryCards: SolutionEntryCard[] = [
-  ...solutionEntries.map((entry) => ({ kind: "internal" as const, entry })),
+  ...solutionEntries
+    .filter((entry) => entry.id !== "cloud-to-cloud")
+    .map((entry) => ({ kind: "internal" as const, entry })),
 ];
 
+const aiSkillCategoryMap = Object.fromEntries(
+  aiSkillCategoryProfiles.map((profile) => [profile.id, profile]),
+) as Record<string, AiSkillCategoryProfile>;
+
+const aiSkillScenarios: SolutionScenario[] = aiSkillDefinitions.map((skill) => {
+  const profile = aiSkillCategoryMap[skill.categoryId];
+
+  return {
+    id: skill.id,
+    entryId: "ai-maas",
+    categoryId: profile.id,
+    categoryLabel: profile.label,
+    title: skill.title,
+    oneLiner: skill.summary,
+    targetCustomers: profile.targetCustomers,
+    painPoints: profile.painPoints,
+    solutionApproach: [skill.focus, ...profile.solutionApproach],
+    recommendedServices: skill.recommendedServices,
+    demoSkillLinks: [link(skill.title.en, skill.githubPath)],
+    quickIntegration: {
+      prerequisites: profile.prerequisites,
+      steps: [
+        {
+          en: `Review the ${skill.title.en} Skill, its prerequisites, reference assets, and validation path.`,
+          es: `Revise el Skill ${skill.title.es}, sus prerequisitos, activos de referencia y ruta de validación.`,
+        },
+        ...profile.steps,
+      ],
+      configuration: profile.configuration,
+      apiAccess: profile.apiAccess,
+    },
+    salesTalkTrack: profile.salesTalkTrack,
+    expectedOutcomes: [skill.outcome, ...profile.expectedOutcomes],
+    heroImage: skill.heroImage,
+  };
+});
+
 export const solutionScenarios: SolutionScenario[] = [
+  ...aiSkillScenarios,
   {
     id: "ai-coding-agent",
     entryId: "ai-maas",

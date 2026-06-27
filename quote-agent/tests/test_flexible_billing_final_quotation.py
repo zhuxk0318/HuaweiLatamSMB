@@ -40,10 +40,15 @@ from app.cloud_billing_workflow import (
     _final_display_quantity,
     _final_display_service_name,
     _final_display_config_summary,
+    _fallback_source_quantity_from_rows,
     _database_service_display_name,
     _database_config_summary,
     _display_billing_basis_for_quotation,
+    _append_unclaimed_billing_rows,
+    _llm_first_result_covers_billing_rows,
+    _load_llm_json_object,
     _normalize_final_quote_item_for_export,
+    _split_shape_sensitive_candidates,
 )
 from app.flexible_workflow import quote_items
 
@@ -735,10 +740,14 @@ class TestAzureSampleRegression:
         db_items = [fi for fi in final_items if fi.resource_kind == "managed_database"]
         assert len(db_items) == 1
 
-        # Verify platform items were merged
+        # Unsupported platform services stay isolated so one service cannot
+        # absorb another service's source amount in deterministic fallback.
         platform_items = [fi for fi in final_items if fi.resource_kind == "platform_paas_misc"]
-        assert len(platform_items) == 1
-        assert platform_items[0].status == "manual_review"
+        assert len(platform_items) == 5
+        assert {item.source_service_name for item in platform_items} == {
+            "API Management", "Bastion", "Monitor", "Key Vault", "DevOps",
+        }
+        assert all(item.status == "manual_review" for item in platform_items)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2243,6 +2252,14 @@ class TestLLMFirstCompositionPrompt:
         """System prompt says API Management must not absorb unrelated charges."""
         assert "API Management" in self.system_prompt
 
+    def test_prompt_keeps_different_resource_shapes_separate(self):
+        prompt = self.system_prompt.lower()
+        assert "10-30 business-level" in prompt
+        assert "different machine sku" in prompt
+        assert "different disk sku" in prompt
+        assert "different instance shapes" in prompt
+        assert "monitoring/logging as separate candidates" in prompt
+
     def test_filter_billing_rows_for_test_families(self):
         from app.cloud_billing_workflow import _filter_billing_rows_for_test_families
 
@@ -2602,6 +2619,150 @@ class TestThreeLevelFallback:
         }
         result = compose_final_billing_quote_items_with_llm(state)
         assert "final_billing_quote_items" in result
+
+    def test_missing_candidate_field_comma_is_repaired(self):
+        malformed = (
+            '{"candidates":[{"candidate_id":"c1","vendor":"Azure" '
+            '"resource_kind":"platform_paas_misc",'
+            '"source_service_name":"Fabric Capacity Reservation",'
+            '"component_refs":["billing-row::az.xlsx::70"]}]}'
+        )
+        parsed = _load_llm_json_object(malformed)
+        assert parsed["candidates"][0]["vendor"] == "Azure"
+        assert parsed["candidates"][0]["resource_kind"] == "platform_paas_misc"
+
+    def test_missing_candidate_separator_comma_is_repaired(self):
+        malformed = (
+            '{"candidates":[{"candidate_id":"c1"} '
+            '{"candidate_id":"c2"}]}'
+        )
+        parsed = _load_llm_json_object(malformed)
+        assert [candidate["candidate_id"] for candidate in parsed["candidates"]] == ["c1", "c2"]
+
+    def test_repaired_result_must_cover_every_nonzero_row(self):
+        item = CloudBillingFinalQuoteItem(
+            item_id="fqi-1",
+            vendor="Azure",
+            resource_kind="platform_paas_misc",
+            source_service_name="Fabric",
+            source_item_ids=["billing-row::az.xlsx::1"],
+        )
+        rows = [
+            {"row_id": "billing-row::az.xlsx::1", "amount_numeric": 5002.24},
+            {"row_id": "billing-row::az.xlsx::2", "amount_numeric": 146.86},
+        ]
+        assert not _llm_first_result_covers_billing_rows([item], rows)
+
+    def test_zero_amount_rows_do_not_block_coverage(self):
+        item = CloudBillingFinalQuoteItem(
+            item_id="fqi-1",
+            vendor="Azure",
+            resource_kind="platform_paas_misc",
+            source_service_name="Fabric",
+            source_item_ids=["billing-row::az.xlsx::1"],
+        )
+        rows = [
+            {"row_id": "billing-row::az.xlsx::1", "amount_numeric": 5002.24},
+            {"row_id": "billing-row::az.xlsx::2", "amount_numeric": 0},
+        ]
+        assert _llm_first_result_covers_billing_rows([item], rows)
+
+    def test_unclaimed_rows_are_preserved_for_manual_review(self):
+        item = CloudBillingFinalQuoteItem(
+            item_id="fqi-1",
+            vendor="Azure",
+            resource_kind="platform_paas_misc",
+            source_service_name="Fabric",
+            source_monthly_total_usd=5002.24,
+            source_item_ids=["billing-row::az.xlsx::1"],
+        )
+        rows = [
+            {
+                "row_id": "billing-row::az.xlsx::1",
+                "vendor": "Azure",
+                "product_sku": "Fabric Capacity Reservation",
+                "amount_numeric": 5002.24,
+            },
+            {
+                "row_id": "billing-row::az.xlsx::2",
+                "vendor": "Azure",
+                "product_family": "Developer Tools",
+                "product_type": "API Management",
+                "product_sku": "API Management - Developer",
+                "unit_type": "hour",
+                "quantity_numeric": 2232,
+                "amount_numeric": 146.86,
+            },
+        ]
+        completed = _append_unclaimed_billing_rows([item], rows)
+        assert len(completed) == 2
+        orphan = completed[1]
+        assert orphan.source_service_name == "API Management - Developer"
+        assert orphan.source_monthly_total_usd == 146.86
+        assert orphan.status == "manual_review"
+        assert orphan.source_item_ids == ["billing-row::az.xlsx::2"]
+        assert _llm_first_result_covers_billing_rows(completed, rows)
+
+    def test_compute_candidate_is_split_by_source_sku(self):
+        candidates = [{
+            "candidate_id": "vm",
+            "vendor": "Azure",
+            "resource_kind": "compute_vm",
+            "source_service_name": "Virtual Machines",
+            "source_quantity": 2,
+            "component_refs": ["row-1", "row-2"],
+        }]
+        rows = [
+            {"row_id": "row-1", "product_sku": "D8 v3"},
+            {"row_id": "row-2", "product_sku": "F2s v2"},
+        ]
+        split = _split_shape_sensitive_candidates(candidates, rows)
+        assert len(split) == 2
+        assert {item["source_config_summary"] for item in split} == {"D8 v3", "F2s v2"}
+        assert all(item["source_quantity"] is None for item in split)
+
+    def test_same_source_sku_remains_one_candidate(self):
+        candidates = [{
+            "candidate_id": "ebs",
+            "vendor": "AWS",
+            "resource_kind": "block_storage",
+            "source_service_name": "EBS gp3",
+            "component_refs": ["row-1", "row-2"],
+        }]
+        rows = [
+            {"row_id": "row-1", "product_sku": "gp3"},
+            {"row_id": "row-2", "product_sku": "gp3"},
+        ]
+        normalized = _split_shape_sensitive_candidates(candidates, rows)
+        assert len(normalized) == 1
+        assert normalized[0]["component_refs"] == ["row-1", "row-2"]
+        assert normalized[0]["source_quantity"] is None
+
+    def test_excessively_incomplete_repaired_result_is_rejected(self):
+        rows = [
+            {
+                "row_id": f"billing-row::az.xlsx::{index}",
+                "amount_numeric": 1,
+                "product_sku": f"service-{index}",
+            }
+            for index in range(1, 61)
+        ]
+        item = CloudBillingFinalQuoteItem(
+            item_id="fqi-1",
+            vendor="Azure",
+            resource_kind="platform_paas_misc",
+            source_service_name="Partial response",
+            source_item_ids=[row["row_id"] for row in rows[:10]],
+        )
+        assert _append_unclaimed_billing_rows([item], rows) == []
+
+    def test_spanish_vm_hours_fall_back_to_instance_count(self):
+        rows = [{"quantity_numeric": 4464, "unit_type": "1 hora de proceso"}]
+        assert _fallback_source_quantity_from_rows("compute_vm", rows, []) == 6
+
+    def test_spanish_disk_month_falls_back_to_disk_count(self):
+        rows = [{"quantity_numeric": 8.999424, "unit_type": "1 disco/mes"}]
+        assert _fallback_source_quantity_from_rows("block_storage", rows, []) == 9
 
     def test_fenced_json_is_accepted(self, monkeypatch):
         """Markdown fenced JSON from MaaS should be parsed successfully."""

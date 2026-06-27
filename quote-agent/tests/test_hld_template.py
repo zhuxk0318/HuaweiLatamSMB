@@ -130,11 +130,12 @@ class TestContainerHierarchy:
         with pytest.raises(ValueError, match="unknown parent_id"):
             parse_architecture_spec(json.dumps(spec))
 
-    def test_node_missing_container_id_rejected(self):
+    def test_service_node_missing_container_id_falls_back_to_region(self):
         spec = _make_valid_template_spec()
-        del spec["nodes"][0]["container_id"]
-        with pytest.raises(ValueError, match="missing container_id"):
-            parse_architecture_spec(json.dumps(spec))
+        del spec["nodes"][1]["container_id"]
+        result = parse_architecture_spec(json.dumps(spec))
+        node_map = {n["id"]: n for n in result["nodes"]}
+        assert node_map["ecs"]["container_id"] == "region-1"
 
     def test_node_unknown_container_id_rejected(self):
         spec = _make_valid_template_spec()
@@ -208,14 +209,27 @@ class TestHierarchyRules:
         with pytest.raises(ValueError, match="must be inside a subnet"):
             parse_architecture_spec(json.dumps(spec))
 
-    def test_ingress_node_not_in_subnet_rejected(self):
+    def test_ingress_node_under_region_is_autofixed_to_frontend_subnet(self):
         spec = _make_valid_template_spec()
         spec["nodes"][0]["id"] = "cdn"
         spec["nodes"][0]["label"] = "CDN"
         spec["nodes"][0]["product"] = "CDN"
         spec["nodes"][0]["container_id"] = "region-1"
-        with pytest.raises(ValueError, match="Ingress/gateway node .* must be inside a frontend/public subnet"):
-            parse_architecture_spec(json.dumps(spec))
+        spec["edges"][0]["source"] = "cdn"
+        result = parse_architecture_spec(json.dumps(spec))
+        node_map = {n["id"]: n for n in result["nodes"]}
+        assert node_map["cdn"]["container_id"] == "subnet-fe"
+
+    def test_ingress_node_missing_container_id_is_autofixed_to_frontend_subnet(self):
+        spec = _make_valid_template_spec()
+        spec["nodes"][0]["id"] = "cdn"
+        spec["nodes"][0]["label"] = "CDN"
+        spec["nodes"][0]["product"] = "CDN"
+        del spec["nodes"][0]["container_id"]
+        spec["edges"][0]["source"] = "cdn"
+        result = parse_architecture_spec(json.dumps(spec))
+        node_map = {n["id"]: n for n in result["nodes"]}
+        assert node_map["cdn"]["container_id"] == "subnet-fe"
 
 
 # ── Spec validation: edge_kind ───────────────────────────────────────────
@@ -956,8 +970,8 @@ class TestAZHierarchyValidation:
         with pytest.raises(ValueError, match="must not be a child of subnet"):
             parse_architecture_spec(json.dumps(spec))
 
-    def test_az_under_vpc_rejected(self):
-        """AZ container with parent=VPC must be rejected."""
+    def test_az_under_vpc_is_repaired_to_region_az_vpc(self):
+        """Legacy region -> vpc -> az is repaired into region -> az -> vpc."""
         spec = _make_valid_template_spec()
         spec["containers"].append({
             "id": "az-1",
@@ -965,8 +979,11 @@ class TestAZHierarchyValidation:
             "container_type": "az",
             "parent_id": "vpc-1",
         })
-        with pytest.raises(ValueError, match="AZ must be a child of region"):
-            parse_architecture_spec(json.dumps(spec))
+        result = parse_architecture_spec(json.dumps(spec))
+        az = next(c for c in result["containers"] if c["id"] == "az-1")
+        vpc = next(c for c in result["containers"] if c["id"] == "vpc-1")
+        assert az["parent_id"] == "region-1"
+        assert vpc["parent_id"] == "az-1"
 
     def test_az_under_region_accepted(self):
         spec = _make_valid_template_spec()

@@ -74,7 +74,7 @@ export function QuoteEstimatorHub({ lang }: { lang: Lang }) {
     <section className="pricing-section">
       <div className="quote-mode-switch">
         <strong>{t.title}</strong>
-        <div className="segmented-control compact">
+        <div className="segmented-control">
           <button
             type="button"
             className={mode === "rvtools" ? "active" : ""}

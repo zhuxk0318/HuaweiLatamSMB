@@ -31,6 +31,8 @@ from app.flexible_workflow import (
     load_pricebook,
     parse_documents,
     extract_requirement_items,
+    _detect_billing_document,
+    _extract_billing_requirement_items,
     normalize_requirements,
     deduplicate_items,
     map_to_huawei_product,
@@ -1058,9 +1060,11 @@ def extract_cloud_billing_requirement_items(state: FlexibleQuoteState) -> Flexib
     aggregation/standardization LLM calls and uses the deterministic extraction
     path for requirements/agg items.
     """
+    parsed_documents = state.get("parsed_documents", [])
+    billing_documents = [d for d in parsed_documents if _detect_billing_document(d)]
     next_state = dict(state)
     next_state["skip_billing_llm"] = True
-    return extract_requirement_items(next_state)
+    return _extract_billing_requirement_items(next_state, billing_documents, parsed_documents)
 
 
 def _parse_billing_row_number(ref: str) -> int | None:
@@ -1114,7 +1118,7 @@ def _fallback_source_quantity_from_rows(
             unit = str(row.get("unit_type", "")).lower()
             if qty is None:
                 continue
-            if "hour" in unit or unit in {"h", "hrs"}:
+            if "hour" in unit or "hora" in unit or unit in {"h", "hr", "hrs"}:
                 hour_based_qty += qty
                 found_hour = True
         if found_hour:
@@ -1124,6 +1128,18 @@ def _fallback_source_quantity_from_rows(
         return None
 
     if resource_kind == "block_storage":
+        disk_month_qty = 0.0
+        found_disk_month = False
+        for row in valid_rows:
+            qty = row.get("quantity_numeric")
+            unit = str(row.get("unit_type", "")).lower()
+            if qty is None:
+                continue
+            if any(token in unit for token in ("disk/month", "disk month", "disk-month", "volume month", "volume-month", "disco/mes")):
+                disk_month_qty += qty
+                found_disk_month = True
+        if found_disk_month:
+            return max(1, round(disk_month_qty))
         return max(1, len(valid_aggs)) if valid_aggs else 1
 
     if resource_kind in {"load_balancing_and_waf", "vpn_connectivity", "public_ip_or_bandwidth", "backup_security_ops"}:
@@ -1146,21 +1162,38 @@ _LLM_FIRST_COMPOSITION_SYSTEM_PROMPT = (
     "- merge fundamentally different resources (VM+storage, API Management+Fabric);\n"
     "- hide large committed-cost services such as Fabric Capacity Reservation.\n\n"
     "Grouping rules:\n"
-    "- VM/EC2/Compute Engine -> compute_vm\n"
-    "- Managed Disk/EBS/Persistent Disk -> block_storage\n"
-    "- Database compute+storage+IO -> managed_database\n"
-    "- Blob/S3/GCS -> object_storage\n"
-    "- Azure Files/EFS/Filestore -> shared_file_storage\n"
+    "- VM/EC2/Compute Engine -> compute_vm; keep different machine SKU, CPU/memory "
+    "shape, and operating system in separate candidates. NEVER put multiple machine "
+    "SKUs in one candidate;\n"
+    "- Managed Disk/EBS/Persistent Disk -> block_storage; keep different disk SKU, "
+    "tier, capacity class, and snapshot usage separate. NEVER put multiple disk SKUs "
+    "in one candidate;\n"
+    "- Database compute+storage+IO -> managed_database only when they belong to the "
+    "same engine and deployment shape; keep different instance shapes separate;\n"
+    "- Blob/S3/GCS -> object_storage; keep access tiers separate;\n"
+    "- Azure Files/EFS/Filestore -> shared_file_storage; keep hot/cool and other "
+    "performance or access tiers separate;\n"
     "- LB/WAF -> load_balancing_and_waf\n"
     "- VPN/gateway -> vpn_connectivity\n"
-    "- Public IP/bandwidth -> public_ip_or_bandwidth\n"
-    "- Backup/security/monitoring -> backup_security_ops\n"
+    "- Public IP/bandwidth -> public_ip_or_bandwidth; do not absorb private endpoint, "
+    "private link, peering, or unrelated networking services;\n"
+    "- Backup/security/monitoring -> backup_security_ops, but keep backup, host "
+    "security, key management, and monitoring/logging as separate candidates;\n"
     "- Platform/PaaS/misc -> platform_paas_misc manual_review\n\n"
-    "Return strict JSON only.\n"
-    '{"candidate_id","vendor","resource_kind","source_service_name",'
-    '"source_config_summary","source_quantity","source_billing_basis",'
-    '"huawei_product","huawei_spec_hint","huawei_quantity","huawei_billing_basis",'
-    '"status","manual_review_reason","composition_notes","component_refs","confidence"}\n\n'
+    "The final table may contain multiple candidates with the same resource_kind. "
+    "Prefer a few precise candidates over one broad candidate that mixes different "
+    "specifications or service responsibilities.\n\n"
+    "Return strict, compact JSON only. Do not use markdown fences or commentary.\n"
+    "Every candidate must be a JSON object. Use null for unknown optional values "
+    "and include a comma between every field.\n"
+    '{"candidates":[{"candidate_id":"item-1","vendor":"Azure",'
+    '"resource_kind":"compute_vm","source_service_name":"Virtual Machines",'
+    '"source_config_summary":"D8 v3","source_quantity":6,'
+    '"source_billing_basis":"monthly usage","huawei_product":"ECS",'
+    '"huawei_spec_hint":null,"huawei_quantity":6,'
+    '"huawei_billing_basis":"monthly","status":"quoted",'
+    '"manual_review_reason":null,"composition_notes":[],'
+    '"component_refs":["billing-row::source.xlsx::3"],"confidence":0.9}]}\n\n'
     "resource_kind ∈ {compute_vm, block_storage, shared_file_storage, object_storage, "
     "managed_database, load_balancing_and_waf, vpn_connectivity, "
     "public_ip_or_bandwidth, backup_security_ops, platform_paas_misc}\n"
@@ -1263,6 +1296,195 @@ def _extract_json_payload_text(content: Any) -> str | None:
     return text
 
 
+def _load_llm_json_object(json_text: str) -> dict[str, Any]:
+    """Parse an LLM JSON object, repairing only unambiguous missing separators.
+
+    MaaS occasionally returns an otherwise valid object with a comma omitted
+    between adjacent fields or candidate objects. The repair is deliberately
+    narrow: schema validation and row-reference validation remain authoritative.
+    """
+    import json
+
+    current = json_text
+    repairs = 0
+    while True:
+        try:
+            parsed = json.loads(current)
+            if not isinstance(parsed, dict):
+                raise ValueError("LLM composition response is not a JSON object")
+            if repairs:
+                logger.warning("LLM-first composition JSON accepted after %d missing-comma repair(s)", repairs)
+            return parsed
+        except json.JSONDecodeError as exc:
+            if repairs >= 12 or exc.msg != "Expecting ',' delimiter":
+                break
+
+            insert_at = exc.pos
+            while insert_at < len(current) and current[insert_at].isspace():
+                insert_at += 1
+            previous_at = insert_at - 1
+            while previous_at >= 0 and current[previous_at].isspace():
+                previous_at -= 1
+
+            if insert_at >= len(current) or previous_at < 0:
+                break
+            next_char = current[insert_at]
+            previous_char = current[previous_at]
+            if next_char not in {'"', "{", "["} or previous_char in "{[,:":
+                break
+
+            current = current[:insert_at] + "," + current[insert_at:]
+            repairs += 1
+
+    from json_repair import repair_json
+
+    repaired = repair_json(json_text, return_objects=True)
+    if not isinstance(repaired, dict):
+        raise ValueError("Repaired LLM composition response is not a JSON object")
+    logger.warning("LLM-first composition JSON accepted through structural repair")
+    return repaired
+
+
+def _llm_first_result_covers_billing_rows(
+    final_items: list[CloudBillingFinalQuoteItem],
+    billing_rows: list[dict[str, Any]],
+) -> bool:
+    """Require every non-zero billing row to belong to exactly one final item."""
+    expected = {
+        str(row.get("row_id"))
+        for row in billing_rows
+        if row.get("row_id") and abs(_to_float(row.get("amount_numeric")) or _to_float(row.get("amount")) or 0.0) > 0.0001
+    }
+    claimed: set[str] = set()
+    for item in final_items:
+        claimed.update(ref for ref in item.source_item_ids if ref.startswith("billing-row::"))
+    missing = expected - claimed
+    if missing:
+        logger.warning(
+            "LLM-first composition rejected because %d/%d non-zero billing row(s) were not referenced",
+            len(missing),
+            len(expected),
+        )
+        return False
+    return True
+
+
+def _append_unclaimed_billing_rows(
+    final_items: list[CloudBillingFinalQuoteItem],
+    billing_rows: list[dict[str, Any]],
+) -> list[CloudBillingFinalQuoteItem]:
+    """Preserve LLM composition while surfacing omitted source rows for review."""
+    claimed: set[str] = set()
+    for item in final_items:
+        claimed.update(ref for ref in item.source_item_ids if ref.startswith("billing-row::"))
+
+    unclaimed_rows: list[dict[str, Any]] = []
+    nonzero_row_count = 0
+    for row in billing_rows:
+        row_id = str(row.get("row_id") or "")
+        amount = abs(_to_float(row.get("amount_numeric")) or _to_float(row.get("amount")) or 0.0)
+        if not row_id or amount <= 0.0001:
+            continue
+        nonzero_row_count += 1
+        if row_id not in claimed:
+            unclaimed_rows.append(row)
+
+    max_recoverable = max(12, nonzero_row_count // 4)
+    if len(unclaimed_rows) > max_recoverable:
+        logger.warning(
+            "LLM-first composition repair rejected: %d/%d non-zero rows were unclaimed",
+            len(unclaimed_rows),
+            nonzero_row_count,
+        )
+        return []
+
+    completed = list(final_items)
+    counter = 0
+    for row in unclaimed_rows:
+        row_id = str(row.get("row_id") or "")
+        amount = abs(_to_float(row.get("amount_numeric")) or _to_float(row.get("amount")) or 0.0)
+        counter += 1
+        service_name = str(
+            row.get("product_sku")
+            or row.get("product_type")
+            or row.get("product_family")
+            or "Unclassified cloud billing service"
+        ).strip()
+        service_type = str(row.get("product_type") or "").strip()
+        completed.append(
+            CloudBillingFinalQuoteItem(
+                item_id=f"fqi-llm-unclaimed-{counter}",
+                vendor=_normalize_vendor(row.get("vendor")),
+                resource_kind="platform_paas_misc",
+                source_service_family=str(row.get("product_family") or "").strip() or None,
+                source_service_name=service_name,
+                source_config_summary=service_type if service_type and service_type != service_name else None,
+                source_quantity=_to_float(row.get("quantity_numeric")) or _to_float(row.get("quantity")),
+                source_pricing_basis=str(row.get("unit_type") or "").strip() or None,
+                source_monthly_total_usd=round(amount, 2),
+                status="manual_review",
+                composition_notes=["Source row was omitted by LLM composition and preserved for manual review."],
+                source_item_ids=[row_id],
+                manual_review_reason="LLM composition did not assign this billing row to a business-level item.",
+            )
+        )
+    if counter:
+        logger.warning("LLM-first composition preserved %d unclaimed billing row(s) as manual-review items", counter)
+    return completed
+
+
+def _split_shape_sensitive_candidates(
+    candidates_raw: list[dict[str, Any]],
+    billing_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Prevent compute and block-storage candidates from mixing source SKUs."""
+    row_by_id = {
+        str(row.get("row_id")): row
+        for row in billing_rows
+        if row.get("row_id")
+    }
+    expanded: list[dict[str, Any]] = []
+    for candidate in candidates_raw:
+        kind = str(candidate.get("resource_kind") or "")
+        refs = candidate.get("component_refs")
+        if kind not in {"compute_vm", "block_storage"} or not isinstance(refs, list):
+            expanded.append(candidate)
+            continue
+
+        grouped_refs: dict[str, list[str]] = {}
+        for ref in refs:
+            row = row_by_id.get(str(ref))
+            if not row:
+                grouped_refs.setdefault("", []).append(str(ref))
+                continue
+            shape_key = str(row.get("product_sku") or row.get("product_type") or "").strip()
+            grouped_refs.setdefault(shape_key, []).append(str(ref))
+        nonempty_shapes = {key for key in grouped_refs if key}
+        if len(nonempty_shapes) <= 1:
+            normalized_candidate = dict(candidate)
+            normalized_candidate["source_quantity"] = None
+            expanded.append(normalized_candidate)
+            continue
+
+        base_id = str(candidate.get("candidate_id") or f"{kind}-candidate")
+        for index, (shape_key, shape_refs) in enumerate(grouped_refs.items(), start=1):
+            split_candidate = dict(candidate)
+            split_candidate["candidate_id"] = f"{base_id}-sku-{index}"
+            split_candidate["component_refs"] = shape_refs
+            split_candidate["source_quantity"] = None
+            if shape_key:
+                split_candidate["source_config_summary"] = shape_key
+            notes = split_candidate.get("composition_notes")
+            if isinstance(notes, list):
+                split_candidate["composition_notes"] = notes + ["Split by source SKU during deterministic validation."]
+            elif notes:
+                split_candidate["composition_notes"] = [str(notes), "Split by source SKU during deterministic validation."]
+            else:
+                split_candidate["composition_notes"] = ["Split by source SKU during deterministic validation."]
+            expanded.append(split_candidate)
+    return expanded
+
+
 def _coerce_llm_candidate_payload(candidate: dict[str, Any]) -> dict[str, Any]:
     """Coerce common MaaS output quirks into the candidate schema shape.
 
@@ -1339,7 +1561,7 @@ def _compose_final_billing_llm_first(
             if not json_text:
                 logger.warning("LLM-first composition returned empty content — falling back")
                 return None
-            parsed = json.loads(json_text)
+            parsed = _load_llm_json_object(json_text)
             candidates = parsed.get("candidates", [])
             if not candidates:
                 logger.warning("LLM-first composition returned 0 candidates — falling back")
@@ -2183,6 +2405,7 @@ def compose_final_billing_quote_items_with_llm(state: FlexibleQuoteState) -> Fle
             llm_rows, quote_lines_raw, quote_context,
         )
         if candidates_raw is not None:
+            candidates_raw = _split_shape_sensitive_candidates(candidates_raw, llm_rows)
             final_items = _validate_and_enrich_llm_first_candidates(
                 candidates_raw,
                 llm_rows,
@@ -2192,6 +2415,8 @@ def compose_final_billing_quote_items_with_llm(state: FlexibleQuoteState) -> Fle
                 state.get("quote_blockers", []),
             )
             if final_items:
+                final_items = _append_unclaimed_billing_rows(final_items, llm_rows)
+            if final_items and _llm_first_result_covers_billing_rows(final_items, llm_rows):
                 if test_families:
                     state["audit_log"] = _append_audit(
                         state,
@@ -2429,8 +2654,14 @@ def compose_final_billing_quote_items(state: FlexibleQuoteState) -> FlexibleQuot
             grouped[rk] = {}
 
         if rk == "platform_paas_misc":
-            # All platform items merge into one per vendor
-            key = ("platform_paas_misc", item.get("vendor", "Unknown"))
+            # Unsupported services must remain isolated in fallback output.
+            # Merging by vendor can hide a large service (for example Fabric)
+            # under the first unrelated platform service name.
+            key = (
+                "platform_paas_misc",
+                item.get("vendor", "Unknown"),
+                item.get("source_item_id", ""),
+            )
         else:
             builder = _COMPOSITION_KEY_BUILDERS.get(rk)
             if builder:
