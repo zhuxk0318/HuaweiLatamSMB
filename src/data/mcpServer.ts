@@ -382,7 +382,7 @@ export const mcpInstallSteps: Array<{ step: number; title: string; commands: str
       "pip install .",
       "hcloud-mcp --help  # verify installation",
     ],
-    note: "Requires Python 3.10+ and git. Alternative: download tarball from http://huaweilatam.com/downloads/hcloud-mcp-server.tar.gz. Dependencies: mcp>=1.27.0, pyyaml>=6.0 (installed automatically by pip).",
+    note: "Requires Python 3.10+ and git. Alternative: download tarball from http://huaweilatam.com/downloads/hcloud-mcp-server.tar.gz. Dependencies: mcp>=2.0, pyyaml>=6.0 (installed automatically by pip).",
   },
   {
     step: 4,

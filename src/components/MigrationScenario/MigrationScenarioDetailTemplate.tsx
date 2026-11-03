@@ -1285,12 +1285,12 @@ apt-get install -y nodejs`} />
 
             <p className="migration-code-section-label">9. Install hcloud-mcp-server (Python)</p>
             <div className="migration-code-block"><div className="migration-code-line"><div className="migration-code-cmd-row">
-              <code className="migration-code-cmd">{`curl -LsSf https://astral.sh/uv/install.sh | sh\nexport PATH="$HOME/.local/bin:\${PATH}"\necho \'export PATH="$HOME/.local/bin:\${PATH}"\' >> ~/.bashrc\nuv venv ~/.venv --python 3.12\ncurl -LO https://www.huaweilatam.com/downloads/hcloud-mcp-server.tar.gz\ntar xzf hcloud-mcp-server.tar.gz\ncd hcloud-mcp-server\nuv pip install . --python ~/.venv/bin/python\ncd ..\nuv pip install --python ~/.venv/bin/python 'mcp<2'\nln -s ~/.venv/bin/hcloud-mcp /usr/local/bin/hcloud-mcp`}</code>
-              <CopyButton text={`curl -LsSf https://astral.sh/uv/install.sh | sh\nexport PATH="$HOME/.local/bin:\${PATH}"\necho \'export PATH="$HOME/.local/bin:\${PATH}"\' >> ~/.bashrc\nuv venv ~/.venv --python 3.12\ncurl -LO https://www.huaweilatam.com/downloads/hcloud-mcp-server.tar.gz\ntar xzf hcloud-mcp-server.tar.gz\ncd hcloud-mcp-server\nuv pip install . --python ~/.venv/bin/python\ncd ..\nuv pip install --python ~/.venv/bin/python 'mcp<2'\nln -s ~/.venv/bin/hcloud-mcp /usr/local/bin/hcloud-mcp`} />
+              <code className="migration-code-cmd">{`curl -LsSf https://astral.sh/uv/install.sh | sh\nexport PATH="$HOME/.local/bin:\${PATH}"\necho \'export PATH="$HOME/.local/bin:\${PATH}"\' >> ~/.bashrc\nuv venv ~/.venv --python 3.12\ngit clone https://github.com/binrogithub/hcloud-mcp-server\.git\ncd hcloud-mcp-server\nuv pip install \. --python ~/\.venv/bin/python\ncd \.\.\nln -s ~/.venv/bin/hcloud-mcp /usr/local/bin/hcloud-mcp`}</code>
+              <CopyButton text={`curl -LsSf https://astral.sh/uv/install.sh | sh\nexport PATH="$HOME/.local/bin:\${PATH}"\necho \'export PATH="$HOME/.local/bin:\${PATH}"\' >> ~/.bashrc\nuv venv ~/.venv --python 3.12\ngit clone https://github.com/binrogithub/hcloud-mcp-server\.git\ncd hcloud-mcp-server\nuv pip install \. --python ~/\.venv/bin/python\ncd \.\.\nln -s ~/.venv/bin/hcloud-mcp /usr/local/bin/hcloud-mcp`} />
             </div></div></div>
             <p style={{ fontSize: "13px", color: "#666", margin: "4px 0 16px" }}>
-              The <code>curl -LO</code> downloads the hcloud-mcp-server source from this site, then <code>uv pip install .</code> builds and installs it
-              (the <code>hcloud-mcp</code> binary is auto-created by <code>pyproject.toml</code>). The <code>mcp&lt;2</code> downgrade is required — hcloud-mcp-server uses the mcp 1.x API.
+              The <code>git clone</code> downloads the hcloud-mcp-server source from GitHub, then <code>uv pip install \.</code> builds and installs it
+              (the <code>hcloud-mcp</code> binary is auto-created by <code>pyproject.toml</code>). No version downgrade is needed — the server uses the mcp 2.x API.
             </p>
 
             <p className="migration-code-section-label">10. Create OpenCode config (MaaS + hcloud MCP)</p>
@@ -1487,12 +1487,12 @@ EOF`}</code>
 
             <p className="migration-code-section-label">8. Install hcloud-mcp-server</p>
             <div className="migration-code-block"><div className="migration-code-line"><div className="migration-code-cmd-row">
-              <code className="migration-code-cmd">{`curl -LsSf https://astral.sh/uv/install.sh | sh\nexport PATH="$HOME/.local/bin:\${PATH}"\nuv venv ~/.venv --python 3.12\ncurl -LO https://www.huaweilatam.com/downloads/hcloud-mcp-server.tar.gz\ntar xzf hcloud-mcp-server.tar.gz\ncd hcloud-mcp-server\nuv pip install . --python ~/.venv/bin/python\ncd ..\nuv pip install --python ~/.venv/bin/python 'mcp<2'\nln -s ~/.venv/bin/hcloud-mcp /usr/local/bin/hcloud-mcp`}</code>
-              <CopyButton text={`curl -LsSf https://astral.sh/uv/install.sh | sh\nexport PATH="$HOME/.local/bin:\${PATH}"\nuv venv ~/.venv --python 3.12\ncurl -LO https://www.huaweilatam.com/downloads/hcloud-mcp-server.tar.gz\ntar xzf hcloud-mcp-server.tar.gz\ncd hcloud-mcp-server\nuv pip install . --python ~/.venv/bin/python\ncd ..\nuv pip install --python ~/.venv/bin/python 'mcp<2'\nln -s ~/.venv/bin/hcloud-mcp /usr/local/bin/hcloud-mcp`} />
+              <code className="migration-code-cmd">{`curl -LsSf https://astral.sh/uv/install.sh | sh\nexport PATH="$HOME/.local/bin:\${PATH}"\nuv venv ~/.venv --python 3.12\ngit clone https://github.com/binrogithub/hcloud-mcp-server\.git\ncd hcloud-mcp-server\nuv pip install \. --python ~/\.venv/bin/python\ncd \.\.\nln -s ~/.venv/bin/hcloud-mcp /usr/local/bin/hcloud-mcp`}</code>
+              <CopyButton text={`curl -LsSf https://astral.sh/uv/install.sh | sh\nexport PATH="$HOME/.local/bin:\${PATH}"\nuv venv ~/.venv --python 3.12\ngit clone https://github.com/binrogithub/hcloud-mcp-server\.git\ncd hcloud-mcp-server\nuv pip install \. --python ~/\.venv/bin/python\ncd \.\.\nln -s ~/.venv/bin/hcloud-mcp /usr/local/bin/hcloud-mcp`} />
             </div></div></div>
             <p style={{ fontSize: "13px", color: "#666", margin: "4px 0 16px" }}>
               The MCP server exposes hcloud commands as native Hermes tools (<code>mcp_hcloud_list_vpcs</code>, <code>mcp_hcloud_list_servers</code>, etc.).
-              The <code>mcp&lt;2</code> downgrade is required — hcloud-mcp-server uses the mcp 1.x API.
+              No version downgrade is needed — the server uses the mcp 2.x API.
             </p>
 
             <p className="migration-code-section-label">9. Configure Hermes with MaaS + MCP</p>
