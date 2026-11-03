@@ -293,9 +293,11 @@ export const mcpTools: McpTool[] = [
 ];
 
 // Installation snippets for different AI clients.
-export const mcpInstallSnippets: Record<string, { label: string; language: string; code: string }> = {
+// Each includes the config file path so agents know WHERE to write the snippet.
+export const mcpInstallSnippets: Record<string, { label: string; configPath: string; language: string; code: string }> = {
   opencode: {
     label: "opencode",
+    configPath: "~/.config/opencode/opencode.json",
     language: "json",
     code: `{
   "mcp": {
@@ -309,6 +311,7 @@ export const mcpInstallSnippets: Record<string, { label: string; language: strin
   },
   claude: {
     label: "Claude Desktop",
+    configPath: "~/.claude/claude_desktop_config.json",
     language: "json",
     code: `{
   "mcpServers": {
@@ -320,6 +323,7 @@ export const mcpInstallSnippets: Record<string, { label: string; language: strin
   },
   cursor: {
     label: "Cursor",
+    configPath: ".cursor/mcp.json",
     language: "json",
     code: `{
   "mcpServers": {
@@ -331,6 +335,7 @@ export const mcpInstallSnippets: Record<string, { label: string; language: strin
   },
   vscode: {
     label: "VS Code",
+    configPath: ".vscode/settings.json",
     language: "json",
     code: `{
   "mcp.servers": {
@@ -342,6 +347,63 @@ export const mcpInstallSnippets: Record<string, { label: string; language: strin
 }`,
   },
 };
+
+// Step-by-step installation guide (for the page and the plain-text endpoint).
+export const mcpInstallSteps: Array<{ step: number; title: string; commands: string[]; note?: string }> = [
+  {
+    step: 1,
+    title: "Install KooCLI (hcloud)",
+    commands: [
+      "curl -LO https://ap-southeast-3-hwcloudcli.obs.ap-southeast-3.myhuaweicloud.com/cli/latest/huaweicloud-cli-linux-amd64.tar.gz",
+      "tar xzf huaweicloud-cli-linux-amd64.tar.gz",
+      "sudo mv hcloud /usr/local/bin/",
+      "hcloud --version",
+    ],
+    note: "KooCLI is a single binary — no installation needed, just download and extract. Docs: https://support.huaweicloud.com/intl/en-us/qs-hcli/hcli_02_003.html",
+  },
+  {
+    step: 2,
+    title: "Configure Huawei Cloud credentials",
+    commands: [
+      "hcloud configure set --cli-mode=AKSK --cli-region=la-north-2 --cli-agree-privacy-statement=true",
+      "hcloud configure set --cli-access-key=YOUR_ACCESS_KEY --cli-secret-key=YOUR_SECRET_KEY",
+      "hcloud IAM ListCustomPolicies  # verify credentials work",
+    ],
+    note: "Get your AK/SK from the Huawei Cloud console: My Credentials → Access Keys. The region can be any Huawei Cloud region (la-north-2, sa-brazil-1, ap-southeast-1, etc.).",
+  },
+  {
+    step: 3,
+    title: "Download and install the MCP server",
+    commands: [
+      "curl -LO http://huaweilatam.com/downloads/hcloud-mcp-server.tar.gz",
+      "tar xzf hcloud-mcp-server.tar.gz",
+      "cd hcloud-mcp-server",
+      "pip install --upgrade pip setuptools  # needed on older systems (Ubuntu 22.04)",
+      "pip install .",
+      "hcloud-mcp --help  # verify installation",
+    ],
+    note: "Requires Python 3.10+. Dependencies: mcp>=1.27.0, pyyaml>=6.0 (installed automatically by pip).",
+  },
+  {
+    step: 4,
+    title: "Add the MCP server to your AI client",
+    commands: [
+      "# See the installation tabs below for your specific client",
+      "# Copy the JSON config to the config file path shown for your client",
+    ],
+    note: "The config tells your AI client how to start the hcloud-mcp server. After adding it, restart your AI client.",
+  },
+  {
+    step: 5,
+    title: "Verify the integration",
+    commands: [
+      "hcloud-mcp --help  # MCP server starts and shows help",
+      "hcloud IAM ListCustomPolicies  # credentials work",
+      "# In your AI client, ask: 'List my ECS servers in la-north-2'",
+    ],
+    note: "If the AI client can call hcloud_list_servers and get results, the installation is complete.",
+  },
+];
 
 // Example usage blocks shown on the page.
 export const mcpExamples: Array<{ title: string; description: string; language: string; code: string }> = [

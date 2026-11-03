@@ -1,0 +1,118 @@
+Huawei Cloud MCP Server v0.4.0 — Installation Guide
+=====================================================
+
+150 tools. 34 services. One MCP server for AI-assisted infrastructure.
+Download: http://huaweilatam.com/downloads/hcloud-mcp-server.tar.gz (22 KB)
+MCP Protocol: 2025-03-26
+
+PREREQUISITES
+-------------
+- Python 3.10+
+- pip
+- curl
+
+STEP 1: Install KooCLI (hcloud)
+-------------------------------
+KooCLI is the Huawei Cloud command-line interface. It is a single binary.
+
+  curl -LO https://ap-southeast-3-hwcloudcli.obs.ap-southeast-3.myhuaweicloud.com/cli/latest/huaweicloud-cli-linux-amd64.tar.gz
+  tar xzf huaweicloud-cli-linux-amd64.tar.gz
+  sudo mv hcloud /usr/local/bin/
+  hcloud --version
+
+Docs: https://support.huaweicloud.com/intl/en-us/qs-hcli/hcli_02_003.html
+
+STEP 2: Configure Huawei Cloud credentials
+------------------------------------------
+Get your AK/SK from the Huawei Cloud console: My Credentials -> Access Keys.
+
+  hcloud configure set --cli-mode=AKSK --cli-region=la-north-2 --cli-agree-privacy-statement=true
+  hcloud configure set --cli-access-key=YOUR_ACCESS_KEY --cli-secret-key=YOUR_SECRET_KEY
+  hcloud configure set --cli-region=la-north-2
+  echo y | hcloud IAM ListCustomPolicies  # verify credentials work (first run needs privacy agreement)
+
+Available regions: la-north-2, sa-brazil-1, ap-southeast-1, ap-southeast-2, etc.
+
+STEP 3: Download and install the MCP server
+-------------------------------------------
+
+  curl -LO http://huaweilatam.com/downloads/hcloud-mcp-server.tar.gz
+  tar xzf hcloud-mcp-server.tar.gz
+  cd hcloud-mcp-server
+  pip install --upgrade pip setuptools  # needed on older systems (Ubuntu 22.04)
+  pip install .
+  hcloud-mcp --help  # verify installation
+
+Dependencies (installed automatically by pip): mcp>=1.27.0, pyyaml>=6.0
+
+STEP 4: Add the MCP server to your AI client
+--------------------------------------------
+
+For opencode (~/.config/opencode/opencode.json):
+
+  {
+    "mcp": {
+      "hcloud": {
+        "type": "local",
+        "command": ["hcloud-mcp"],
+        "enabled": true
+      }
+    }
+  }
+
+For Claude Desktop (~/.claude/claude_desktop_config.json):
+
+  {
+    "mcpServers": {
+      "hcloud": {
+        "command": "hcloud-mcp"
+      }
+    }
+  }
+
+For Cursor (.cursor/mcp.json):
+
+  {
+    "mcpServers": {
+      "hcloud": {
+        "command": "hcloud-mcp"
+      }
+    }
+  }
+
+For VS Code (.vscode/settings.json):
+
+  {
+    "mcp.servers": {
+      "hcloud": {
+        "type": "stdio",
+        "command": "hcloud-mcp"
+      }
+    }
+  }
+
+STEP 5: Verify the integration
+------------------------------
+
+  hcloud-mcp --help          # MCP server starts and shows help
+  hcloud IAM ListCustomPolicies  # credentials work
+
+In your AI client, ask: "List my ECS servers in la-north-2"
+If the AI client calls hcloud_list_servers and gets results, the installation is complete.
+
+TOOLS OVERVIEW
+--------------
+- 149 structured read-only tools (type-safe, JSON schema, readOnlyHint annotation)
+- 1 generic hcloud_cli catch-all (destructiveHint annotation, dry-run by default)
+- 34 services: ECS, VPC, EIP, EVS, IAM, ELB, RDS, CCE, AS, OBS, DNS, KMS, CES, IMS,
+  NAT, DCS, DDS, SMN, VPN, DRS, SWR, OMS, SMS, CBR, CCI, MRS, DWS, GaussDB, ER, CFW,
+  CodeArts, DataArts, Organizations, LTS, BSS
+
+TROUBLESHOOTING
+---------------
+- "hcloud: command not found" -> KooCLI not installed or not in PATH. Run: which hcloud
+- "hcloud-mcp: command not found" -> MCP server not installed. Run: pip install .
+- Tool calls return auth errors -> Run: hcloud configure list, verify AK/SK and region
+- Enable debug logging: hcloud-mcp --debug
+
+Full documentation: http://huaweilatam.com/#/mcp

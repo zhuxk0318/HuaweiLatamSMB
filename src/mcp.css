@@ -212,6 +212,69 @@
   font-family: monospace;
 }
 
+/* Installation steps */
+.mcp-install-steps-section {
+  padding: 2rem 2rem 1rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.mcp-steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+.mcp-step {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+}
+.mcp-step-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+}
+.mcp-step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #2563eb;
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+.mcp-step-header strong {
+  font-size: 1.05rem;
+  color: #0f172a;
+}
+.mcp-step-note {
+  font-size: 0.82rem;
+  color: #64748b;
+  margin: 0.65rem 0 0;
+  line-height: 1.45;
+}
+.mcp-config-path {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+  color: #475569;
+}
+.mcp-config-path code {
+  font-family: monospace;
+  background: #f1f5f9;
+  padding: 0.2rem 0.55rem;
+  border-radius: 4px;
+  color: #1e293b;
+  font-size: 0.82rem;
+}
+
 /* Installation */
 .mcp-install-section {
   padding: 2rem 2rem 3rem;

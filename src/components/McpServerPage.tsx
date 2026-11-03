@@ -14,6 +14,7 @@ import {
   mcpCategoryOrder,
   mcpTools,
   mcpInstallSnippets,
+  mcpInstallSteps,
   mcpExamples,
   type McpServiceCategory,
 } from "../data/mcpServer";
@@ -261,6 +262,32 @@ function McpServices({ lang }: { lang: Lang }) {
   );
 }
 
+function McpInstallSteps({ lang }: { lang: Lang }) {
+  const t = pageCopy[lang];
+  return (
+    <section className="content-section mcp-install-steps-section">
+      <div className="section-heading">
+        <span className="section-kicker">{lang === "es" ? "Guía de instalación" : "Installation guide"}</span>
+        <h2>{lang === "es" ? "Paso a paso" : "Step by step"}</h2>
+      </div>
+      <div className="mcp-steps-list">
+        {mcpInstallSteps.map(({ step, title, commands, note }) => (
+          <div className="mcp-step" key={step}>
+            <div className="mcp-step-header">
+              <span className="mcp-step-number">{step}</span>
+              <strong>{title}</strong>
+            </div>
+            <pre className="mcp-code-block mcp-code-block-sm">
+              <code>{commands.join("\n")}</code>
+            </pre>
+            {note && <p className="mcp-step-note">{note}</p>}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function McpInstall({ lang }: { lang: Lang }) {
   const t = pageCopy[lang];
   const tabs = Object.entries(mcpInstallSnippets);
@@ -284,6 +311,10 @@ function McpInstall({ lang }: { lang: Lang }) {
             {snip.label}
           </button>
         ))}
+      </div>
+      <div className="mcp-config-path">
+        <strong>{lang === "es" ? "Archivo de config:" : "Config file:"}</strong>
+        <code>{activeSnippet.configPath}</code>
       </div>
       <pre className="mcp-code-block">
         <code>{activeSnippet.code}</code>
@@ -406,6 +437,7 @@ export function McpServerPage({ lang }: { lang: Lang }) {
       <McpHero lang={lang} />
       <McpStats lang={lang} />
       <McpServices lang={lang} />
+      <McpInstallSteps lang={lang} />
       <McpInstall lang={lang} />
       <McpToolTable lang={lang} />
       <McpExamples lang={lang} />
