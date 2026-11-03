@@ -362,12 +362,17 @@ def _read_single_excel(upload: UploadFile) -> dict[str, bytes | str]:
 
 
 def _read_billing_file(upload: UploadFile) -> dict[str, bytes | str]:
-    """Read a single file for Cloud Billing Quote (.xlsx or .csv)."""
-    if not upload.filename or not upload.filename.lower().endswith((".xlsx", ".csv")):
-        raise HTTPException(status_code=415, detail="Cloud Billing Quote supports .xlsx and .csv files only.")
+    """Read a single file for Cloud Billing Quote (.xlsx, .csv, or .pdf)."""
+    if not upload.filename or not upload.filename.lower().endswith((".xlsx", ".csv", ".pdf")):
+        raise HTTPException(
+            status_code=415,
+            detail="Cloud Billing Quote supports .xlsx, .csv, and .pdf files only.",
+        )
     content = upload.file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded billing file is empty.")
+    if upload.filename.lower().endswith(".pdf") and not content.startswith(b"%PDF"):
+        raise HTTPException(status_code=415, detail="The uploaded .pdf file is not a valid PDF.")
     return {"filename": upload.filename, "content": content}
 
 
@@ -558,7 +563,7 @@ def create_cloud_billing_annotate_task(
     sheet_selection_mode: str = Form(default="first"),
     sheet_selection_input: str = Form(default=""),
 ) -> RowQuoteTaskCreatedResponse:
-    """Create a row-quote annotation task for cloud billing exports (.xlsx/.csv)."""
+    """Create a Cloud Billing task for .xlsx, .csv, or text-based .pdf inputs."""
     if not customer_notes.strip():
         raise HTTPException(status_code=422, detail="customer_notes is required. Provide AI quote guidance for the cloud billing annotation task.")
     upload = _read_billing_file(flexible_file)
@@ -600,7 +605,7 @@ def preview_cloud_billing_quote(
     sheet_selection_mode: str = Form(default="first"),
     sheet_selection_input: str = Form(default=""),
 ) -> FlexibleQuotePreviewResponse:
-    """Preview a cloud billing quote. Accepts .xlsx and .csv billing exports."""
+    """Preview a cloud billing quote. Accepts .xlsx, .csv, and text-based .pdf."""
     uploads = _read_flexible_files(flexible_files)
     context = {"region": region or None, "language": lang, "customer_notes": customer_notes, "quote_mode": "cloud_billing"}
     try:

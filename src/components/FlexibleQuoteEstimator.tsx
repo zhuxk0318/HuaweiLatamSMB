@@ -102,13 +102,13 @@ const uiCopy: Record<QuoteMode, Record<string, Record<string, string>>> = {
       currentStage: "Etapa actual",
       previewFailed: "Falló el análisis",
       taskMissing: "La tarea ya no existe o el servicio se reinició.",
-      idle: "Cargue un archivo .xlsx o .csv para iniciar.",
+      idle: "Cargue un archivo .xlsx, .csv o .pdf para iniciar.",
       ready: "Archivo listo para analizar.",
       previewQueued: "Tarea en cola...",
       previewRunning: "Analizando facturación...",
       exporting: "Generando Excel anotado...",
       success: "Excel anotado listo para exportar.",
-      invalidFile: "Cloud Billing Quote admite archivos .xlsx y .csv.",
+      invalidFile: "Cloud Billing Quote admite archivos .xlsx, .csv y .pdf.",
       summaryWaiting: "El resumen aparecerá cuando termine el análisis.",
       totalRows: "Total filas",
       quotedRows: "Cotizadas",
@@ -150,13 +150,13 @@ const uiCopy: Record<QuoteMode, Record<string, Record<string, string>>> = {
       currentStage: "Current stage",
       previewFailed: "Analysis failed",
       taskMissing: "The task no longer exists or the service restarted.",
-      idle: "Upload a .xlsx or .csv file to start.",
+      idle: "Upload a .xlsx, .csv, or .pdf file to start.",
       ready: "File is ready for billing analysis.",
       previewQueued: "Task queued...",
       previewRunning: "Analyzing billing...",
       exporting: "Generating annotated workbook...",
       success: "Annotated workbook is ready to export.",
-      invalidFile: "Cloud Billing Quote supports .xlsx and .csv files.",
+      invalidFile: "Cloud Billing Quote supports .xlsx, .csv, and .pdf files.",
       summaryWaiting: "Summary will appear when analysis completes.",
       totalRows: "Total rows",
       quotedRows: "Quoted",
@@ -198,13 +198,13 @@ const uiCopy: Record<QuoteMode, Record<string, Record<string, string>>> = {
       currentStage: "当前阶段",
       previewFailed: "分析失败",
       taskMissing: "任务不存在，或服务已经重启。",
-      idle: "请上传一个 .xlsx 或 .csv 文件开始。",
+      idle: "请上传一个 .xlsx、.csv 或 .pdf 文件开始。",
       ready: "文件已准备好，可开始分析。",
       previewQueued: "任务排队中...",
       previewRunning: "正在分析账单...",
       exporting: "正在生成标注后的工作簿...",
       success: "标注工作簿已可导出。",
-      invalidFile: "云账单报价支持 .xlsx 和 .csv 文件。",
+      invalidFile: "云账单报价支持 .xlsx、.csv 和 .pdf 文件。",
       summaryWaiting: "分析完成后会显示汇总。",
       totalRows: "总行数",
       quotedRows: "已报价",
@@ -246,13 +246,13 @@ const uiCopy: Record<QuoteMode, Record<string, Record<string, string>>> = {
       currentStage: "Current stage",
       previewFailed: "Analysis failed",
       taskMissing: "The task no longer exists or the service restarted.",
-      idle: "Upload a .xlsx or .csv file to start.",
+      idle: "Upload a .xlsx, .csv, or .pdf file to start.",
       ready: "File is ready for billing analysis.",
       previewQueued: "Task queued...",
       previewRunning: "Analyzing billing...",
       exporting: "Generating annotated workbook...",
       success: "Annotated workbook is ready to export.",
-      invalidFile: "Cloud Billing Quote supports .xlsx and .csv files.",
+      invalidFile: "Cloud Billing Quote supports .xlsx, .csv, and .pdf files.",
       summaryWaiting: "Summary will appear when analysis completes.",
       totalRows: "Total rows",
       quotedRows: "Quoted",
@@ -557,6 +557,7 @@ export function FlexibleQuoteEstimator({ lang, quoteMode }: { lang: Lang; quoteM
   const progressBusy = previewState === "queued" || previewState === "running";
   const canExport = Boolean(taskId && previewState === "succeeded" && !exporting);
   const notesEmpty = quoteContext.customer_notes.trim().length === 0;
+  const isPdfFile = Boolean(file && /\.pdf$/i.test(file.name));
   const summary = task?.summary || null;
 
   function resetTracking(nextState: PreviewViewState) {
@@ -572,7 +573,7 @@ export function FlexibleQuoteEstimator({ lang, quoteMode }: { lang: Lang; quoteM
     event.target.value = "";
     if (!selected) return;
     const isCloudBilling = quoteMode === "cloud_billing";
-    const validExt = isCloudBilling ? /\.xlsx$|\.csv$/i : /\.xlsx$/i;
+    const validExt = isCloudBilling ? /\.(xlsx|csv|pdf)$/i : /\.xlsx$/i;
     if (!validExt.test(selected.name)) {
       setError(t.invalidFile);
       setPreviewState("failed");
@@ -615,7 +616,7 @@ export function FlexibleQuoteEstimator({ lang, quoteMode }: { lang: Lang; quoteM
   async function runPreview() {
     if (!file) return;
     if (notesEmpty) { setError(t.notesRequired); return; }
-    if (sheetMode === "selected" && !sheetInput.trim()) { setError(t.sheetSpecifyEmpty); return; }
+    if (!isPdfFile && sheetMode === "selected" && !sheetInput.trim()) { setError(t.sheetSpecifyEmpty); return; }
     pollTokenRef.current += 1;
     const token = pollTokenRef.current;
     setPreviewState("queued");
@@ -628,8 +629,8 @@ export function FlexibleQuoteEstimator({ lang, quoteMode }: { lang: Lang; quoteM
       formData.append("region", quoteContext.region);
       formData.append("lang", quoteContext.language);
       formData.append("customer_notes", quoteContext.customer_notes);
-      formData.append("sheet_selection_mode", sheetMode);
-      if (sheetMode === "selected") {
+      formData.append("sheet_selection_mode", isPdfFile ? "all" : sheetMode);
+      if (!isPdfFile && sheetMode === "selected") {
         formData.append("sheet_selection_input", sheetInput);
       }
       const response = await fetch(modeApiBase, { method: "POST", body: formData });
@@ -688,7 +689,7 @@ export function FlexibleQuoteEstimator({ lang, quoteMode }: { lang: Lang; quoteM
           <label className="upload-button">
             <UploadCloud size={18} />
             {t.upload}
-            <input type="file" accept={quoteMode === "cloud_billing" ? ".xlsx,.csv" : ".xlsx"} onChange={onFileChange} disabled={progressBusy || exporting} />
+            <input type="file" accept={quoteMode === "cloud_billing" ? ".xlsx,.csv,.pdf" : ".xlsx"} onChange={onFileChange} disabled={progressBusy || exporting} />
           </label>
           <button type="button" className="upload-button secondary" onClick={runPreview} disabled={!file || progressBusy || exporting || notesEmpty}>
             <Calculator size={18} />
@@ -743,6 +744,7 @@ export function FlexibleQuoteEstimator({ lang, quoteMode }: { lang: Lang; quoteM
             />
             {notesEmpty && <p className="form-error">{t.notesRequired}</p>}
           </div>
+          {!isPdfFile && (
           <div>
             <strong>{t.sheetSelection}</strong>
             <div className="segmented-control compact">
@@ -761,6 +763,7 @@ export function FlexibleQuoteEstimator({ lang, quoteMode }: { lang: Lang; quoteM
               />
             )}
           </div>
+          )}
         </div>
 
         <article className="quote-panel">

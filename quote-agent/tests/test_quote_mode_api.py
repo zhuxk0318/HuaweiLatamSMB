@@ -287,7 +287,10 @@ def test_cloud_billing_graph_nodes_match_flexible():
     flexible_nodes = set(flexible_preview_graph.nodes.keys())
     # Phase 5A: cloud billing graph intentionally skips understand_input
     # Phase 10/14: cloud billing graph adds compose_final_billing_quote_items_with_llm
-    expected_billing_nodes = (flexible_nodes - {"understand_input"}) | {"compose_final_billing_quote_items_with_llm"}
+    expected_billing_nodes = (flexible_nodes - {"understand_input"}) | {
+        "compose_final_billing_quote_items_with_llm",
+        "review_cloud_billing_mapping_with_llm",
+    }
     assert billing_nodes == expected_billing_nodes, \
         f"Cloud billing nodes {billing_nodes} should match flexible nodes minus understand_input plus compose_final_billing_quote_items_with_llm {expected_billing_nodes}"
 

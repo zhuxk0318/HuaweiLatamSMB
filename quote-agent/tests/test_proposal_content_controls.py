@@ -281,6 +281,14 @@ class TestPptSectionGating:
         assert "Configuración de Servicios" in combined
         assert "Pricing info" in combined
 
+    def test_empty_next_steps_does_not_add_slide(self, tmp_path):
+        data = self._sample_data()
+        data["sections"]["next_steps"] = ""
+
+        titles = self._get_slide_titles(tmp_path, data)
+
+        assert "Next Steps" not in titles
+
     def test_migration_plan_when_include_migration_true(self, tmp_path):
         data = self._sample_data()
         data["content_selection"]["include_migration"] = True

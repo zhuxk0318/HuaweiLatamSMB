@@ -423,7 +423,7 @@ def test_export_api_returns_excel():
 
     assert response.status_code == 200
     assert response.media_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    assert "quote-mexico-" in response.headers["content-disposition"]
+    assert 'filename="Quoted-sample.xlsx"' in response.headers["content-disposition"]
 
 
 def test_flexible_catalog_endpoint_filters_rows():
@@ -742,7 +742,8 @@ def test_flexible_preview_task_failure_sets_failed_status_and_error():
     assert final is not None
     assert final.status == "failed"
     assert final.error is not None
-    assert final.error.last_stage == "ingest_files"
+    assert final.error.last_stage == "parse_documents"
+    assert "valid PDF signature" in final.error.detail
 
 
 def test_flexible_preview_task_missing_returns_404():

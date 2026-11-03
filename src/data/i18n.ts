@@ -6,6 +6,7 @@ type Copy = {
     highlights: string;
     solutions: string;
     migration: string;
+    mcp: string;
     pricing: string;
     hld: string;
     proposal: string;
@@ -49,7 +50,8 @@ export const copy: Record<Lang, Copy> = {
       home: "Inicio",
       highlights: "Highlights",
       solutions: "Soluciones",
-      migration: "Migration",
+      migration: "Migración",
+      mcp: "MCP Server",
       pricing: "Pricing",
       hld: "HLD Design",
       proposal: "Proposal",
@@ -139,6 +141,7 @@ export const copy: Record<Lang, Copy> = {
       highlights: "Highlights",
       solutions: "Solutions",
       migration: "Migration",
+      mcp: "MCP Server",
       pricing: "Pricing",
       hld: "HLD Design",
       proposal: "Proposal",
@@ -227,7 +230,8 @@ export const copy: Record<Lang, Copy> = {
       home: "首页",
       highlights: "亮点",
       solutions: "方案",
-      migration: "Migration",
+      migration: "迁移",
+      mcp: "MCP Server",
       pricing: "Pricing",
       hld: "HLD Design",
       proposal: "Proposal",
@@ -317,6 +321,7 @@ export const copy: Record<Lang, Copy> = {
       highlights: "Destaques",
       solutions: "Soluções",
       migration: "Migration",
+      mcp: "MCP Server",
       pricing: "Pricing",
       hld: "HLD Design",
       proposal: "Proposal",

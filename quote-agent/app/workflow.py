@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import copy
 import os
+import re
+import unicodedata
 import json
 from datetime import datetime, timezone
 from io import BytesIO
@@ -1323,6 +1325,26 @@ def _populate_template_summary_sheet(
     )
 
 
+def _quoted_filename_from_sources(source_filenames: list[str] | None, fallback: str = "") -> str:
+    """Build a download filename: Quoted-{first source stem}.xlsx.
+
+    Multi-file uploads use the first file's stem. Stems are ASCII-safe
+    (non-ASCII stripped, special chars collapsed to '-'). Falls back to
+    'Quoted-inventory.xlsx' when no usable source name is available.
+    """
+    default = "Quoted-inventory.xlsx"
+    raw = source_filenames[0] if source_filenames else fallback
+    stem = re.sub(r"\.(xlsx|xls|csv)$", "", raw, flags=re.I).strip()
+    if not stem:
+        return default
+    normalized = unicodedata.normalize("NFKD", stem)
+    ascii_stem = normalized.encode("ascii", "ignore").decode("ascii")
+    ascii_stem = re.sub(r"[^A-Za-z0-9._-]+", "-", ascii_stem).strip("-._")
+    if not ascii_stem:
+        return default
+    return f"Quoted-{ascii_stem}.xlsx"
+
+
 def export_excel(state: QuoteState) -> QuoteState:
     summary = QuoteSummary.model_validate(state["summary"])
     request = _request_model(state)
@@ -1346,8 +1368,7 @@ def export_excel(state: QuoteState) -> QuoteState:
         source_filenames=state.get("source_filenames"),
     )
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    filename = f"quote-{request.region}-{stamp}.xlsx"
+    filename = _quoted_filename_from_sources(state.get("source_filenames"), getattr(request, "source_filename", "") or "")
     output = BytesIO()
     workbook.save(output)
     return {"workbook": QuoteWorkbook(filename=filename, content=output.getvalue())}

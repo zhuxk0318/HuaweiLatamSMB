@@ -30,5 +30,130 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      (function () {
+        const pageHash = "#/solutions/vmware-migration";
+
+        const zh = {
+          "Datacenter On-Premise": "本地数据中心迁移",
+          "Presentation": "迁移方案",
+          "How to Start": "如何开始",
+          "Demo Video": "Demo 视频",
+          "Migrate VMware, OpenStack, and on-prem VM workloads to Huawei Cloud ECS with SMS agent and MgC batch orchestration.": "将 VMware、OpenStack 和本地虚拟机工作负载迁移到华为云 ECS，并使用 SMS Agent 与 MgC 批量编排完成迁移。",
+          "AI coding tool installed: OpenCode, Hermes, or Claude Code.": "已安装 AI Coding 工具：OpenCode、Hermes 或 Claude Code。",
+          "Recommended skills installed in ~/.opencode/skills/ (or equivalent).": "已将推荐 Skills 安装到 ~/.opencode/skills/（或等效目录）。",
+          "Target VPC.": "目标 VPC。",
+          "Discover with AI: Scan your source environment and generate a complete inventory — servers, databases, applications, network, and dependencies. Verify the results against your actual environment.": "AI 发现：扫描源端环境并生成完整清单，包括服务器、数据库、应用、网络和依赖关系；请结合实际环境核对结果。",
+          "Plan with AI: Generate the target architecture on Huawei Cloud, including a migration plan and cost estimates. Review the plan before proceeding.": "AI 规划：生成华为云目标架构，包括迁移计划和成本估算；执行前请先评审方案。",
+          "Agent with AI: Install the migration agent on each source VM. The agent syncs data to Huawei Cloud while your VMs keep running.": "AI Agent：在每台源端虚拟机上安装迁移 Agent；虚拟机持续运行的同时，Agent 会将数据同步到华为云。",
+          "Template with AI: Prepare migration templates for each VM group — matching or exceeding your current server sizes, storage, and network configuration.": "AI 模板：为每组虚拟机准备迁移模板，使目标规格、存储和网络配置匹配或优于当前环境。",
+          "Migrate with AI: Start migration in batches, grouped by application. Begin with 2-3 non-critical VMs as a pilot, then scale up.": "AI 迁移：按应用分组进行批量迁移；先选择 2-3 台非关键虚拟机试点，再逐步扩大范围。",
+          "Validate with AI: Verify each migrated VM — boot, network, data integrity, and application health. Require specific evidence before approving cutover.": "AI 验证：逐台验证迁移后的虚拟机，包括启动、网络、数据完整性和应用健康状态；确认切换前需保留明确证据。",
+          "Is there a difference between VMware migration and server migration?": "VMware 迁移和服务器迁移有什么区别？",
+          "What operating systems do Huawei Cloud migration tools support?": "华为云迁移工具支持哪些操作系统？",
+          "Do I need to stop my applications during migration?": "迁移过程中需要停止应用吗？",
+          "Server migration is a general term for moving any server to Huawei Cloud. VMware migration is a specific type where VMs are moved from a VMware environment (vCenter/ESXi) to Huawei Cloud ECS. Huawei Cloud SMS and MgC support both, plus migration from AWS, Azure, GCP, and on-premises servers.": "服务器迁移是指将任意服务器迁移到华为云的通用场景；VMware 迁移是其中一种特定类型，主要将 VMware 环境（vCenter/ESXi）中的虚拟机迁移到华为云 ECS。华为云 SMS 和 MgC 同时支持这两类场景，也支持从 AWS、Azure、GCP 和本地服务器迁移。",
+          "Huawei Cloud SMS supports 40+ operating systems including Linux distributions (CentOS, Ubuntu, Debian, Red Hat, SUSE, Oracle Linux) and Windows Server (2012, 2016, 2019, 2022).": "华为云 SMS 支持 40 多种操作系统，包括常见 Linux 发行版（CentOS、Ubuntu、Debian、Red Hat、SUSE、Oracle Linux）以及 Windows Server（2012、2016、2019、2022）。",
+          "No. SMS Agent performs incremental sync while your VM stays running. Only the final cutover requires a brief pause (typically minutes) to sync the last changes and switch DNS to the new ECS instance. Most migrations are non-disruptive until cutover.": "通常不需要。SMS Agent 会在虚拟机持续运行时执行增量同步，只有最终切换时需要短暂停机（通常为分钟级），用于同步最后变更并将业务切换到新的 ECS 实例。大多数迁移在切换前不会中断业务。",
+          "Download VMware Migration Skill (ZIP)": "下载 VMware 迁移 Skill (ZIP)",
+          "View on GitHub": "在 GitHub 查看",
+          "The ZIP extracts to a folder named": "ZIP 解压后会得到名为",
+          ". Install it in:": "的文件夹，请安装到：",
+          "or use git clone": "或使用 git clone",
+          "Clone the repository": "克隆代码仓库",
+          "Copy the skill to OpenCode": "将 Skill 复制到 OpenCode",
+          "Copy the skill to Hermes": "将 Skill 复制到 Hermes",
+          "Copy the skill to Claude Code": "将 Skill 复制到 Claude Code",
+          "Then copy the skill to your AI coding tool": "然后将 Skill 复制到你的 AI Coding 工具",
+          "(if you need to install these tools, review": "（如果需要安装这些工具，请查看",
+          "here": "这里",
+          ")": "）"
+        };
+
+        const es = {
+          "Datacenter On-Premise": "Centro de datos local",
+          "Presentation": "Presentación",
+          "How to Start": "Cómo empezar",
+          "Migrate VMware, OpenStack, and on-prem VM workloads to Huawei Cloud ECS with SMS agent and MgC batch orchestration.": "Migre cargas de VM de VMware, OpenStack y entornos locales a Huawei Cloud ECS con agente SMS y orquestación por lotes de MgC.",
+          "Migre cargas de VM de VMware, OpenStack y on-prem a Huawei Cloud ECS con agente SMS y orquestación batch MgC.": "Migre cargas de VM de VMware, OpenStack y entornos locales a Huawei Cloud ECS con agente SMS y orquestación por lotes de MgC.",
+          "Discover con IA: Escanee su entorno origen y genere un inventario completo — servidores, bases de datos, aplicaciones, red y dependencias. Verifique los resultados contra su entorno real.": "Descubrimiento con IA: escanee su entorno origen y genere un inventario completo — servidores, bases de datos, aplicaciones, red y dependencias. Verifique los resultados contra su entorno real.",
+          "Plan con IA: Genere la arquitectura objetivo en Huawei Cloud, incluyendo un plan de migración y estimaciones de costo. Revise el plan antes de continuar.": "Planificación con IA: genere la arquitectura objetivo en Huawei Cloud, incluyendo un plan de migración y estimaciones de costo. Revise el plan antes de continuar.",
+          "Agent con IA: Instale el agente de migración en cada VM origen. El agente sincroniza datos con Huawei Cloud mientras sus VMs siguen ejecutándose.": "Agente con IA: instale el agente de migración en cada VM origen. El agente sincroniza datos con Huawei Cloud mientras sus VMs siguen ejecutándose.",
+          "Template con IA: Prepare plantillas de migración para cada grupo de VMs — igualando o superando sus tamaños de servidor, almacenamiento y configuración de red actuales.": "Plantillas con IA: prepare plantillas de migración para cada grupo de VMs, igualando o superando sus tamaños de servidor, almacenamiento y configuración de red actuales.",
+          "Migrate con IA: Inicie la migración en lotes, agrupados por aplicación. Comience con 2-3 VMs no críticas como piloto, luego escale.": "Migración con IA: inicie la migración por lotes, agrupada por aplicación. Comience con 2-3 VMs no críticas como piloto y luego escale.",
+          "Validate con IA: Verifique cada VM migrada — boot, red, integridad de datos y health de aplicación. Exija evidencia específica antes de aprobar el cutover.": "Validación con IA: verifique cada VM migrada — arranque, red, integridad de datos y estado de la aplicación. Exija evidencia específica antes de aprobar el corte final.",
+          "Download VMware Migration Skill (ZIP)": "Descargar VMware Migration Skill (ZIP)",
+          "View on GitHub": "Ver en GitHub",
+          "The ZIP extracts to a folder named": "El ZIP se extrae en una carpeta llamada",
+          ". Install it in:": ". Instálelo en:",
+          "or use git clone": "o use git clone",
+          "Clone the repository": "Clone el repositorio",
+          "Copy the skill to OpenCode": "Copie el Skill a OpenCode",
+          "Copy the skill to Hermes": "Copie el Skill a Hermes",
+          "Copy the skill to Claude Code": "Copie el Skill a Claude Code",
+          "Then copy the skill to your AI coding tool": "Luego copie el Skill a su herramienta de AI Coding",
+          "(if you need to install these tools, review": "(si necesita instalar estas herramientas, revise",
+          "here": "aquí"
+        };
+
+        function getLang() {
+          return localStorage.getItem("huawei-latam-smb-lang") || document.documentElement.lang || "es";
+        }
+
+        function isVmwareMigrationPage() {
+          return window.location.hash.startsWith(pageHash);
+        }
+
+        function patchTextNode(node, dictionary) {
+          const original = node.nodeValue;
+          if (!original || !original.trim()) return;
+          const leading = original.match(/^\s*/)[0];
+          const trailing = original.match(/\s*$/)[0];
+          const key = original.trim();
+          const next = dictionary[key];
+          if (next && next !== key) {
+            node.nodeValue = leading + next + trailing;
+          }
+        }
+
+        function patchVmwareLanguage() {
+          if (!isVmwareMigrationPage()) return;
+          const lang = getLang();
+          const dictionary = lang === "zh" ? zh : lang === "es" ? es : null;
+          if (!dictionary) return;
+          const walker = document.createTreeWalker(
+            document.body,
+            NodeFilter.SHOW_TEXT,
+            {
+              acceptNode(node) {
+                const parent = node.parentElement;
+                if (!parent) return NodeFilter.FILTER_REJECT;
+                if (parent.closest("script,style,code,textarea")) return NodeFilter.FILTER_REJECT;
+                return NodeFilter.FILTER_ACCEPT;
+              },
+            },
+          );
+          const nodes = [];
+          while (walker.nextNode()) nodes.push(walker.currentNode);
+          nodes.forEach((node) => patchTextNode(node, dictionary));
+        }
+
+        let timer = null;
+        const schedulePatch = () => {
+          clearTimeout(timer);
+          timer = setTimeout(patchVmwareLanguage, 40);
+        };
+
+        window.addEventListener("hashchange", schedulePatch);
+        window.addEventListener("storage", schedulePatch);
+        document.addEventListener("click", schedulePatch, true);
+        new MutationObserver(schedulePatch).observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+        });
+        schedulePatch();
+      })();
+    </script>
   </body>
 </html>

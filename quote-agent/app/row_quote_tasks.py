@@ -109,6 +109,26 @@ def _is_cancelled(task_id: str) -> bool:
 
 def _billing_summary_from_state(state: dict[str, Any]) -> RowQuoteSummary:
     summary = FlexibleQuoteSummary.model_validate(state.get("summary", {}))
+    final_items = state.get("final_billing_quote_items", [])
+    if final_items:
+        quoted = sum(1 for item in final_items if item.get("status") == "quoted")
+        partial = sum(1 for item in final_items if item.get("status") == "partial")
+        manual = sum(1 for item in final_items if item.get("status") == "manual_review")
+        unquoted = sum(1 for item in final_items if item.get("status") == "unquoted")
+        unmatched = sum(1 for item in final_items if not item.get("huawei_product"))
+        return RowQuoteSummary(
+            total_rows=len(final_items),
+            quoted_rows=quoted,
+            unmatched_rows=unmatched,
+            manual_review_rows=manual,
+            missing_price_rows=unquoted + partial,
+            non_quote_rows=0,
+            total_ondemand_monthly=summary.total_monthly_price,
+            total_monthly=summary.total_monthly_price,
+            total_ri_1y_monthly=0,
+            currency=summary.currency,
+        )
+
     blockers = state.get("quote_blockers", [])
     unquoted = state.get("unquoted_items", [])
     quote_lines = state.get("quote_lines", [])
@@ -155,6 +175,8 @@ def _billing_progress_from_state(state: dict[str, Any]) -> RowQuoteProgress:
 
 
 def _quote_summary_from_state(state: dict[str, Any]) -> RowQuoteSummary:
+    if state.get("final_billing_quote_items"):
+        return _billing_summary_from_state(state)
     summary = FlexibleQuoteSummary.model_validate(state.get("summary", {}))
     requirements = state.get("requirements", [])
     quote_lines = state.get("quote_lines", [])

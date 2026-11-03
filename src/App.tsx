@@ -6,6 +6,7 @@ import {
   Layers3,
 } from "lucide-react";
 import { ChatPortal } from "./components/ChatPortal";
+import { McpServerPage } from "./components/McpServerPage";
 import { MigrationExplorer } from "./components/MigrationExplorer";
 import { QuoteEstimatorHub } from "./components/QuoteEstimatorHub";
 import { SolutionDetailPage } from "./components/SolutionDetailPage";
@@ -14,7 +15,7 @@ import { initAnalytics, trackClick, trackPageView } from "./analytics";
 import { copy, type Lang } from "./data/i18n";
 import { solutionEntries, solutionEntryCards, textFor } from "./data/solutions";
 
-type Route = "home" | "estimator" | "solutionsIndex" | "solution" | "migration" | "hld" | "proposal";
+type Route = "home" | "estimator" | "solutionsIndex" | "solution" | "migration" | "mcp" | "hld" | "proposal";
 
 function getInitialLang(): Lang {
   const stored = window.localStorage.getItem("huawei-latam-smb-lang");
@@ -27,6 +28,9 @@ function getRoute(): Route {
   }
   if (window.location.hash.startsWith("#/migration")) {
     return "migration";
+  }
+  if (window.location.hash.startsWith("#/mcp")) {
+    return "mcp";
   }
   if (window.location.hash.startsWith("#/hld")) {
     return "hld";
@@ -43,9 +47,22 @@ function getRoute(): Route {
   return "home";
 }
 
+const SOLUTION_ID_REDIRECTS: Record<string, string> = {
+  "datacenter-onprem-migration": "vmware-migration",
+  "ai-coding": "ai-coding-opencode",
+};
+
 function getSolutionId() {
   const match = window.location.hash.match(/^#\/solutions\/([^/?#]+)/);
-  return match ? decodeURIComponent(match[1]) : null;
+  if (!match) return null;
+  const raw = decodeURIComponent(match[1]);
+  const redirect = SOLUTION_ID_REDIRECTS[raw];
+  if (redirect) {
+    const rest = window.location.hash.slice(match[0].length);
+    window.location.replace(`#/solutions/${redirect}${rest}`);
+    return redirect;
+  }
+  return raw;
 }
 
 function getSolutionsEntryId() {
@@ -58,7 +75,7 @@ function getSolutionsEntryId() {
 }
 
 function scrollForRoute(route: Route) {
-  if (route === "estimator" || route === "solution" || route === "solutionsIndex" || route === "migration" || route === "hld" || route === "proposal") {
+  if (route === "estimator" || route === "solution" || route === "solutionsIndex" || route === "migration" || route === "mcp" || route === "hld" || route === "proposal") {
     window.scrollTo({ top: 0 });
     return;
   }
@@ -209,9 +226,10 @@ function SiteHeader({
   setLang: (lang: Lang) => void;
 }) {
   const t = copy[lang];
+    const activeRoute = route === "solution" && window.location.hash.includes("from=migration") ? "migration" : route;
 
   return (
-    <header className="site-header">
+    <header className={activeRoute === "migration" ? "site-header migration-site-header" : "site-header"}>
       <a
         className="brand"
         href="#/"
@@ -229,7 +247,7 @@ function SiteHeader({
       </a>
       <nav className="main-nav" aria-label="Primary">
         <a
-          className={route === "home" ? "nav-active" : ""}
+          className={activeRoute === "home" ? "nav-active" : ""}
           href="#/"
           onClick={() =>
             trackClick({
@@ -242,7 +260,7 @@ function SiteHeader({
           {t.nav.home}
         </a>
         <a
-          className={route === "solutionsIndex" || route === "solution" ? "nav-active" : ""}
+          className={activeRoute === "solutionsIndex" || activeRoute === "solution" ? "nav-active" : ""}
           href="#/solutions"
           onClick={() =>
             trackClick({
@@ -255,7 +273,7 @@ function SiteHeader({
           {t.nav.solutions}
         </a>
         <a
-          className={route === "migration" ? "nav-active" : ""}
+          className={activeRoute === "migration" ? "nav-active" : ""}
           href="#/migration"
           onClick={() =>
             trackClick({
@@ -268,7 +286,20 @@ function SiteHeader({
           {t.nav.migration}
         </a>
         <a
-          className={route === "estimator" ? "nav-active" : ""}
+          className={activeRoute === "mcp" ? "nav-active" : ""}
+          href="#/mcp"
+          onClick={() =>
+            trackClick({
+              click_target: "nav_mcp",
+              click_section: "header",
+              destination: "#/mcp",
+            })
+          }
+        >
+          {t.nav.mcp}
+        </a>
+        <a
+          className={activeRoute === "estimator" ? "nav-active" : ""}
           href="#/estimator"
           onClick={() =>
             trackClick({
@@ -281,7 +312,7 @@ function SiteHeader({
           {t.nav.pricing}
         </a>
         <a
-          className={route === "hld" ? "nav-active" : ""}
+          className={activeRoute === "hld" ? "nav-active" : ""}
           href="#/hld"
           onClick={() =>
             trackClick({
@@ -294,7 +325,7 @@ function SiteHeader({
           {t.nav.hld}
         </a>
         <a
-          className={route === "proposal" ? "nav-active" : ""}
+          className={activeRoute === "proposal" ? "nav-active" : ""}
           href="#/proposal"
           onClick={() =>
             trackClick({
@@ -652,9 +683,7 @@ function EstimatorPage({ lang }: { lang: Lang }) {
 function MigrationPage({ lang }: { lang: Lang }) {
   return (
     <main id="top" className="migration-page">
-      <section className="content-section">
-        <MigrationExplorer lang={lang} />
-      </section>
+      <MigrationExplorer lang={lang} />
     </main>
   );
 }
@@ -696,6 +725,8 @@ function App() {
           ? "Huawei LATAM - Solution Detail"
         : route === "migration"
           ? "Huawei LATAM - Migration & Modernization"
+        : route === "mcp"
+          ? "Huawei LATAM - MCP Server"
         : route === "hld"
           ? "Huawei LATAM - HLD Design"
         : route === "proposal"
@@ -722,6 +753,8 @@ function App() {
             <EstimatorPage lang={lang} />
           ) : route === "migration" ? (
             <MigrationPage lang={lang} />
+          ) : route === "mcp" ? (
+            <McpServerPage lang={lang} />
           ) : route === "solution" ? (
             <SolutionDetailPage lang={lang} solutionId={solutionId} />
           ) : route === "solutionsIndex" ? (

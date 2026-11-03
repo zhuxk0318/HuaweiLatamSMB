@@ -15,6 +15,8 @@ from app.models import (
     RequirementItem,
 )
 from app.proposal_tasks import (
+    _build_content_prompt,
+    _normalize_next_steps,
     _tasks,
     _lock,
     create_proposal_task,
@@ -91,6 +93,58 @@ class TestProposalModelOverride:
         assert client.model == "glm-5.1-test"
 
 
+class TestSimplifiedProposalInput:
+    def test_customer_brief_can_replace_legacy_context_fields(self):
+        request = ProposalRequest(
+            project_name="ERP modernization",
+            customer_name="Example Customer",
+            country="Mexico",
+            customer_brief="Modernize an on-premises ERP and improve availability.",
+        )
+
+        assert request.customer_brief
+        assert request.business_background == ""
+        assert request.current_pain_points == ""
+        assert request.target_outcomes == ""
+
+    def test_prompt_uses_customer_brief_and_limits_follow_up_actions(self):
+        request = ProposalRequest(
+            project_name="ERP modernization",
+            customer_brief="Modernize an on-premises ERP and improve availability.",
+        )
+
+        prompt = _build_content_prompt(request, None, "skipped")
+
+        assert "Customer brief: Modernize an on-premises ERP" in prompt
+        assert "Output language: English" in prompt
+        assert "at most 3 distinct actions" in prompt
+        assert "Treat missing details as explicit assumptions" in prompt
+
+    def test_next_steps_are_deduplicated_and_capped(self):
+        result = _normalize_next_steps([
+            "Confirm the project scope",
+            "Confirm the project scope",
+            "Validate the target architecture",
+            "Agree the implementation sequence",
+            "Start another unrelated action",
+        ])
+
+        assert result.splitlines() == [
+            "1. Confirm the project scope",
+            "2. Validate the target architecture",
+            "3. Agree the implementation sequence",
+        ]
+
+    def test_numbered_single_line_steps_are_split(self):
+        result = _normalize_next_steps("1. Confirm scope 2. Validate architecture 3. Agree delivery sequence 4. Start implementation")
+
+        assert result.splitlines() == [
+            "1. Confirm scope",
+            "2. Validate architecture",
+            "3. Agree delivery sequence",
+        ]
+
+
 # --- Fake LLM responses ---
 
 _VALID_LLM_JSON = json.dumps({
@@ -163,6 +217,42 @@ class TestLlmGeneratesValidJson:
         data = json.loads(content)
         assert len(data["assumptions"]) == 2
         assert len(data["risks"]) == 2
+
+    def test_next_steps_are_normalized(self):
+        created = create_proposal_task(_make_request())
+        _wait_for_task(created.task_id)
+        content, _, _ = get_proposal_artifact(created.task_id, "json")
+        data = json.loads(content)
+
+        assert data["sections"]["next_steps"].splitlines() == [
+            "1. Detailed assessment",
+            "2. POC",
+            "3. Migration",
+        ]
+
+
+class TestOptionalNextSteps:
+    def test_missing_next_steps_does_not_force_fallback(self, monkeypatch):
+        response = json.dumps({
+            "executive_summary": "Concise summary",
+            "current_challenges": "Limited scalability",
+            "target_solution": "A phased cloud solution",
+            "pricing_summary": "",
+            "assumptions": [],
+            "risks": [],
+        })
+
+        def _fake_build(*, timeout=None):
+            return _FakeClient(response)
+
+        monkeypatch.setattr("app.proposal_tasks.build_proposal_chat_client_from_env", _fake_build)
+        created = create_proposal_task(_make_request(customer_brief="Modernize the current platform."))
+        _wait_for_task(created.task_id)
+        content, _, _ = get_proposal_artifact(created.task_id, "json")
+        data = json.loads(content)
+
+        assert data["content_status"] == "generated"
+        assert data["sections"]["next_steps"] == ""
 
 
 class TestLlmInvalidJsonFallsBack:

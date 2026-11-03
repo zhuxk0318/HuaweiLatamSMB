@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -185,7 +186,7 @@ def _run_flexible_quote(request: ProposalRequest) -> ProposalQuoteResult:
 
 # --- Proposal content generation ---
 
-_REQUIRED_CONTENT_KEYS = {"executive_summary", "current_challenges", "target_solution", "pricing_summary", "next_steps"}
+_REQUIRED_CONTENT_KEYS = {"executive_summary", "current_challenges", "target_solution"}
 
 
 def build_proposal_chat_client_from_env(*, timeout: float | None = None) -> ChatCompletionsClient:
@@ -206,15 +207,25 @@ def _build_content_prompt(
     hld_status: str,
 ) -> str:
     """Build the LLM prompt for proposal content generation."""
+    customer_brief = (request.customer_brief or "").strip()
+    output_language = {"en": "English", "es": "Spanish", "zh": "Chinese"}.get(request.language, "English")
     parts = [
-        "Generate a brief, sales-oriented proposal content in JSON format.",
+        "Generate a concise, sales-oriented cloud proposal in JSON format.",
+        "Analyze the customer brief and structure it into business context, challenges, outcomes, and a recommended solution.",
+        "Treat missing details as explicit assumptions instead of asking the user more questions.",
         "",
         "Project context:",
         f"- Project: {request.project_name}",
-        f"- Business background: {request.business_background}",
-        f"- Current pain points: {request.current_pain_points}",
-        f"- Target outcomes: {request.target_outcomes}",
+        f"- Output language: {output_language}",
     ]
+    if customer_brief:
+        parts.append(f"- Customer brief: {customer_brief}")
+    if request.business_background:
+        parts.append(f"- Business background: {request.business_background}")
+    if request.current_pain_points:
+        parts.append(f"- Current pain points: {request.current_pain_points}")
+    if request.target_outcomes:
+        parts.append(f"- Target outcomes: {request.target_outcomes}")
     if request.customer_name:
         parts.append(f"- Customer: {request.customer_name}")
     if request.country:
@@ -267,12 +278,53 @@ def _build_content_prompt(
     parts.extend([
         "",
         "Return ONLY a JSON object with these keys:",
-        "  executive_summary, current_challenges, target_solution, pricing_summary, next_steps",
+        "  executive_summary, current_challenges, target_solution, pricing_summary",
+        "  next_steps (optional array of short actions)",
         "  assumptions (list of strings), risks (list of strings)",
         "",
-        "Rules: keep each field under 200 words. Do not fabricate prices, products, or timelines not provided above.",
+        "Rules:",
+        "- Keep each narrative field under 160 words.",
+        "- Do not fabricate prices, products, customer scale, SLA commitments, or timelines.",
+        "- Generate next_steps only when concrete immediate actions are justified.",
+        "- next_steps must contain at most 3 distinct actions, each no longer than 20 words.",
+        "- Do not automatically list assessment, workshop, POC, and migration as a generic sequence.",
     ])
     return "\n".join(parts)
+
+
+def _normalize_next_steps(value: Any) -> str:
+    """Return at most three short, unique actions in a stable display format."""
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        candidates = [str(item).strip() for item in value]
+    else:
+        text = str(value).strip()
+        if not text:
+            return ""
+        candidates = [line.strip() for line in text.splitlines() if line.strip()]
+        if len(candidates) == 1:
+            numbered = re.split(r"(?=\b\d+[.)]\s*)", candidates[0])
+            candidates = [part.strip() for part in numbered if part.strip()]
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        cleaned = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", candidate).strip()
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        if not cleaned:
+            continue
+        words = cleaned.split()
+        if len(words) > 20:
+            cleaned = " ".join(words[:20]).rstrip(" ,;:") + "..."
+        key = re.sub(r"\W+", " ", cleaned).strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(cleaned)
+        if len(normalized) == 3:
+            break
+    return "\n".join(f"{index}. {step}" for index, step in enumerate(normalized, start=1))
 
 
 def _content_fallback(
@@ -282,6 +334,12 @@ def _content_fallback(
     error: str | None = None,
 ) -> ProposalContentResult:
     """Build deterministic fallback content when LLM is unavailable or fails."""
+    customer_brief = (
+        request.customer_brief
+        or request.business_background
+        or request.current_pain_points
+        or request.target_outcomes
+    ).strip()
     if not request.include_price:
         pricing_summary = "Pricing was not included in this proposal scope."
     elif quote_result and quote_result.status == "succeeded":
@@ -292,7 +350,7 @@ def _content_fallback(
     else:
         pricing_summary = "Pricing details to be refined."
 
-    target_solution = request.target_outcomes
+    target_solution = request.target_outcomes or "A phased Huawei Cloud solution should be refined against the confirmed scope."
     if not request.include_hld and "architecture diagram" in target_solution.lower():
         target_solution = target_solution.replace("architecture diagram", "").strip()
 
@@ -300,11 +358,11 @@ def _content_fallback(
         status="fallback",
         model=None,
         sections=ProposalGeneratedSections(
-            executive_summary=f"Proposal for {request.project_name}: {request.business_background}",
-            current_challenges=request.current_pain_points,
+            executive_summary=f"Proposal for {request.project_name}: {customer_brief}",
+            current_challenges=request.current_pain_points or "Key challenges should be confirmed against the customer brief.",
             target_solution=target_solution,
             pricing_summary=pricing_summary,
-            next_steps="Detailed next steps to be determined after further assessment.",
+            next_steps="",
             assumptions=[],
             risks=[],
         ),
@@ -363,7 +421,7 @@ def _generate_proposal_content(
             current_challenges=str(data.get("current_challenges", "")),
             target_solution=str(data.get("target_solution", "")),
             pricing_summary=str(data.get("pricing_summary", "")),
-            next_steps=str(data.get("next_steps", "")),
+            next_steps=_normalize_next_steps(data.get("next_steps")),
             assumptions=data.get("assumptions", []) if isinstance(data.get("assumptions"), list) else [],
             risks=data.get("risks", []) if isinstance(data.get("risks"), list) else [],
         )

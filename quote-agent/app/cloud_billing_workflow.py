@@ -18,6 +18,7 @@ CloudBillingFinalQuoteItem entries using unified cross-cloud composition rules.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -49,14 +50,24 @@ from app.flexible_workflow import (
     _get_billing_final_composition_timeout_seconds,
     _get_billing_llm_timeout_seconds,
     _to_float,
+    _append_audit,
+    _report_progress,
+    FlexibleWorkflowError,
 )
 from app.models import (
+    CloudBillingAnalyzedItem,
     CloudBillingFinalCompositionCandidate,
     CloudBillingFinalQuoteItem,
+    CloudBillingMappingCorrection,
     CloudBillingResourceKind,
+    CloudBillingTargetComponent,
+    ComputeSpec,
     FinalQuoteItemStatus,
     FlexibleQuoteLine,
+    GenericSpec,
+    NetworkSpec,
     RequirementItem,
+    StorageSpec,
 )
 
 logger = logging.getLogger(__name__)
@@ -1061,10 +1072,99 @@ def extract_cloud_billing_requirement_items(state: FlexibleQuoteState) -> Flexib
     path for requirements/agg items.
     """
     parsed_documents = state.get("parsed_documents", [])
+    pdf_documents = _pdf_documents(state)
+    if pdf_documents:
+        _report_progress(
+            state,
+            "extract_requirement_items",
+            "running",
+            "Analyzing the complete cloud billing PDF with the LLM.",
+        )
+        payload = _build_full_document_analysis_payload(
+            pdf_documents,
+            state.get("quote_context", {}),
+        )
+        prompt_chars = len(json.dumps(payload, ensure_ascii=False))
+        max_chars = int(os.getenv("CLOUD_BILLING_FULL_DOCUMENT_MAX_CHARS", "400000"))
+        if prompt_chars > max_chars:
+            raise FlexibleWorkflowError(
+                "The complete cloud billing document exceeds the configured LLM context limit.",
+                stage="extract_requirement_items",
+                detail=f"Full-document prompt is {prompt_chars:,} characters; limit is {max_chars:,}.",
+            )
+        parsed = _call_cloud_billing_json(_FULL_DOCUMENT_ANALYSIS_SYSTEM_PROMPT, payload)
+        raw_items = parsed.get("items", []) if parsed else []
+        analyzed_items = _validate_full_document_analysis(
+            raw_items,
+            pdf_documents,
+            str(parsed.get("v") or parsed.get("vendor") or "Unknown") if parsed else "Unknown",
+        )
+        if not analyzed_items:
+            raise FlexibleWorkflowError(
+                "The LLM could not produce a complete, reconciled cloud billing analysis.",
+                stage="extract_requirement_items",
+                detail=(
+                    "Full-document analysis failed source-reference or total reconciliation. "
+                    "No quotation was generated."
+                ),
+            )
+        filename = str(pdf_documents[0].get("filename") or "cloud-billing.pdf")
+        requirements, analyzed_items = _requirements_from_document_analysis(
+            analyzed_items,
+            filename,
+        )
+        billing_lines = _billing_lines_from_document_analysis(analyzed_items, filename)
+        mapped = [
+            {
+                "mapped_id": component.requirement_item_id or component.component_id,
+                "huawei_product": component.huawei_product,
+                "needs_manual_review": bool(component.manual_review_reason or not component.huawei_product),
+                "source_file": filename,
+                "source_line_numbers": [index],
+            }
+            for index, item in enumerate(analyzed_items, start=1)
+            for component in item.target_components
+        ]
+        message = (
+            f"Full-document LLM analysis produced {len(analyzed_items)} source item(s) "
+            f"and {len(requirements)} priceable target component(s)."
+        )
+        _report_progress(state, "extract_requirement_items", "completed", message)
+        return {
+            "requirements": requirements,
+            "billing_lines": billing_lines,
+            "billing_groups": [],
+            "llm_aggregated_billing_items": [],
+            "standardized_billing_resources": [],
+            "mapped_billing_resources": mapped,
+            "cloud_billing_analysis_items": [item.model_dump() for item in analyzed_items],
+            "audit_log": _append_audit(
+                state,
+                "extract_requirement_items",
+                message,
+                prompt_chars=prompt_chars,
+            ),
+        }
+
     billing_documents = [d for d in parsed_documents if _detect_billing_document(d)]
     next_state = dict(state)
     next_state["skip_billing_llm"] = True
     return _extract_billing_requirement_items(next_state, billing_documents, parsed_documents)
+
+
+def deduplicate_cloud_billing_requirements(state: FlexibleQuoteState) -> FlexibleQuoteState:
+    """Preserve full-document source ownership; deduplicate legacy row exports."""
+    if state.get("cloud_billing_analysis_items"):
+        message = (
+            "Preserved complete-document requirements without cross-source "
+            "deduplication."
+        )
+        _report_progress(state, "deduplicate_items", "completed", message)
+        return {
+            "requirements": state.get("requirements", []),
+            "audit_log": _append_audit(state, "deduplicate_items", message),
+        }
+    return deduplicate_items(state)
 
 
 def _parse_billing_row_number(ref: str) -> int | None:
@@ -1547,6 +1647,9 @@ def _compose_final_billing_llm_first(
                 json={
                     "model": model,
                     "temperature": 0.1,
+                    "max_tokens": int(
+                        os.getenv("BILLING_FULL_DOCUMENT_MAX_OUTPUT_TOKENS", "16000")
+                    ),
                     "response_format": {"type": "json_object"},
                     "messages": [
                         {"role": "system", "content": _LLM_FIRST_COMPOSITION_SYSTEM_PROMPT},
@@ -1581,6 +1684,772 @@ _ALLOWED_HUAWEI_PRODUCTS = frozenset({
     "Anti-DDoS", "CFW", "CES", "ModelArts", "FunctionGraph", "GaussDB",
 })
 
+
+_FULL_DOCUMENT_ANALYSIS_SYSTEM_PROMPT = """You analyze a COMPLETE public-cloud billing or estimate document.
+The input contains every non-empty source line with a stable source_ref. Apply the
+same process to Azure, AWS, GCP, and other public clouds.
+
+Return business-level source items and Huawei Cloud target components. One source
+item may have multiple target components, for example compute plus block storage.
+Do not output Huawei prices. Do not invent source references. Do not omit any
+non-zero source service. Keep different regions, environments, machine shapes, and
+service responsibilities separate unless they are genuinely the same business item.
+
+For PDF estimates, source_refs MUST include the exact service line containing its
+monthly source amount. Configuration continuation lines may also be referenced.
+Use quantities from the document. Convert explicit source configurations into
+target quantities, for example 16 instances with 300 GB each means ECS quantity 16
+and EVS capacity quantity 4800 GB-month. If a Huawei equivalent is uncertain, leave
+target_components empty and set manual_review_reason.
+
+Allowed Huawei products:
+ECS, EVS, OBS, SFS Turbo, RDS, DDS, DWS, ELB, WAF, VPN, EIP, CBR, HSS,
+NAT Gateway, Direct Connect as a Service, CCE, CCI, VPC, Workspace, DRS,
+CSS, LTS, DLI, DCS, GeminiDB, DMS, DataArts Studio, Cloud Connect, DEW,
+Anti-DDoS, CFW, CES, ModelArts, FunctionGraph, GaussDB.
+
+The response has a strict output limit. Return ONLY the provider and one minimal
+mapping for every required source amount ref:
+{"v":"AWS","items":[
+{"r":"pdf-line::1::12","t":[
+["ECS",16,"instance-month","8 vCPU / 32 GiB",8,32,null,null],
+["EVS",4800,"capacity gib month","general purpose SSD",null,null,4800,"gpssd"]
+]},
+{"r":"pdf-line::1::20","t":[],"mr":"No confident Huawei equivalent"}
+]}
+
+Each target array is exactly:
+[Huawei product, quantity, unit, spec hint, vcpu, memory GiB, capacity GiB, tier]
+Use null for unknown values. Do not emit names, descriptions, regions, source
+amounts, rationale, confidence, or any additional keys. The backend recovers all
+source fields from the source ref and recalculates amounts. Do not stop early.
+"""
+
+
+_FULL_DOCUMENT_REVIEW_SYSTEM_PROMPT = """Review a complete cloud-document mapping
+after deterministic Huawei catalog matching. Check omissions, grouping, target
+product, specification, and quantity. Never output or modify prices. Use only the
+component_id values provided. Return only material corrections; keep is optional.
+Components with no product are review placeholders: either keep them for manual
+review or use replace_product with product, quantity, unit, and specification.
+Never aggregate or transfer quantities across source items, regions, or
+environments. Only propose replace_quantity when the current quantity is missing.
+
+Return compact JSON only:
+{"corrections":[{"component_id":"source-1-compute","action":"replace_spec",
+"huawei_product":null,"quantity":null,"unit":null,
+"spec_hint":"8 vCPU / 32 GiB","vcpu":8,"memory_gib":32,
+"capacity_gib":null,"tier":null,"reason":"Correct source shape"}]}
+
+action is one of keep, replace_product, replace_spec, replace_quantity,
+manual_review. Products must come from the allowed Huawei product list. Prices are
+owned by the backend and must not appear in the response.
+"""
+
+
+def _call_cloud_billing_json(system_prompt: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Call MaaS for a structured cloud-billing decision."""
+    import httpx
+
+    api_key = os.getenv("HUAWEI_MAAS_API_KEY")
+    base_url = os.getenv("HUAWEI_MAAS_BASE_URL")
+    model = os.getenv("HUAWEI_MAAS_MODEL")
+    if not api_key or not base_url or not model:
+        return None
+    try:
+        with httpx.Client(timeout=_get_billing_final_composition_timeout_seconds()) as client:
+            response = client.post(
+                f"{base_url.rstrip('/')}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": model,
+                    "temperature": 0.1,
+                    "response_format": {"type": "json_object"},
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                    ],
+                },
+            )
+            response.raise_for_status()
+            content = response.json()["choices"][0]["message"]["content"]
+            json_text = _extract_json_payload_text(content)
+            return _load_llm_json_object(json_text) if json_text else None
+    except Exception as exc:
+        logger.warning("Full-document cloud billing LLM call failed: %s", exc)
+        return None
+
+
+def _pdf_documents(state: FlexibleQuoteState) -> list[dict[str, Any]]:
+    return [
+        document
+        for document in state.get("parsed_documents", [])
+        if document.get("document_type") == "cloud_billing_pdf"
+    ]
+
+
+def _build_full_document_analysis_payload(
+    documents: list[dict[str, Any]],
+    quote_context: dict[str, Any],
+) -> dict[str, Any]:
+    required_source_amount_refs: list[dict[str, str]] = []
+    for document in documents:
+        declared = _to_float(document.get("declared_monthly_total"))
+        for row in document.get("rows", []):
+            text = str(row.get("text") or "")
+            amounts = re.findall(r"(?<!\d)(\d[\d,]*\.\d{2})\s*(?:USD|US\$|\$)", text, re.I)
+            # A detail line normally has upfront + monthly. Summary lines have
+            # three values and are not source-item ownership rows.
+            if len(amounts) == 2:
+                monthly = float(amounts[-1].replace(",", ""))
+                if declared is None or abs(monthly - declared) > 0.001:
+                    required_source_amount_refs.append(
+                        {
+                            "source_ref": str(row.get("source_ref") or ""),
+                            "monthly_amount": f"{monthly:.2f}",
+                        }
+                    )
+    return {
+        "quote_context": quote_context,
+        "required_source_amount_ref_count": len(required_source_amount_refs),
+        "required_source_amount_refs": required_source_amount_refs,
+        "completeness_requirement": (
+            "Every required_source_amount_ref must appear in exactly one source item's "
+            "source_refs. Do not stop early."
+        ),
+        "documents": [
+            {
+                "filename": document.get("filename"),
+                "page_count": document.get("page_count"),
+                "declared_monthly_total": document.get("declared_monthly_total"),
+                "lines": [
+                    {
+                        "source_ref": row.get("source_ref"),
+                        "text": row.get("text"),
+                    }
+                    for row in document.get("rows", [])
+                ],
+            }
+            for document in documents
+        ],
+    }
+
+
+def _source_line_monthly_amount(text: str) -> float | None:
+    """Return the last currency amount on a service line (normally monthly cost)."""
+    values = re.findall(r"(?<!\d)(\d[\d,]*\.\d{2})\s*(?:USD|US\$|\$)", text, re.I)
+    return float(values[-1].replace(",", "")) if values else None
+
+
+def _validate_full_document_analysis(
+    raw_items: list[dict[str, Any]],
+    documents: list[dict[str, Any]],
+    default_vendor: str = "Unknown",
+) -> list[CloudBillingAnalyzedItem]:
+    """Validate refs/products and deterministically recover all source amounts."""
+    line_by_ref: dict[str, dict[str, Any]] = {}
+    ordered_rows: list[dict[str, Any]] = []
+    declared_totals: list[float] = []
+    for document in documents:
+        for row in document.get("rows", []):
+            ref = str(row.get("source_ref") or "")
+            if ref:
+                line_by_ref[ref] = row
+                ordered_rows.append(row)
+        declared = _to_float(document.get("declared_monthly_total"))
+        if declared is not None:
+            declared_totals.append(declared)
+
+    claimed_cost_refs: set[str] = set()
+    component_ids: set[str] = set()
+    cost_ref_positions = [
+        index
+        for index, row in enumerate(ordered_rows)
+        if len(
+            re.findall(
+                r"(?<!\d)(\d[\d,]*\.\d{2})\s*(?:USD|US\$|\$)",
+                str(row.get("text") or ""),
+                re.I,
+            )
+        )
+        == 2
+    ]
+    source_block_by_ref: dict[str, list[str]] = {}
+    for position_index, start in enumerate(cost_ref_positions):
+        end = cost_ref_positions[position_index + 1] if position_index + 1 < len(cost_ref_positions) else len(ordered_rows)
+        ref = str(ordered_rows[start].get("source_ref") or "")
+        source_block_by_ref[ref] = [
+            str(row.get("text") or "").strip()
+            for row in ordered_rows[start:end]
+            if str(row.get("text") or "").strip()
+        ]
+
+    validated: list[CloudBillingAnalyzedItem] = []
+    for item_index, raw in enumerate(raw_items, start=1):
+        if "item_id" not in raw:
+            compact_targets = []
+            for target_index, target in enumerate(
+                raw.get("t", []) if isinstance(raw.get("t"), list) else [],
+                start=1,
+            ):
+                if isinstance(target, list):
+                    values = list(target) + [None] * 8
+                    target = {
+                        "i": f"source-{item_index}-component-{target_index}",
+                        "p": values[0],
+                        "q": values[1],
+                        "u": values[2],
+                        "x": values[3],
+                        "c": values[4],
+                        "m": values[5],
+                        "z": values[6],
+                        "tier": values[7],
+                    }
+                capacity_value = target.get("z")
+                tier_value = target.get("tier")
+                if isinstance(tier_value, (int, float)):
+                    if capacity_value is None:
+                        capacity_value = tier_value
+                    tier_value = None
+                compact_targets.append(
+                    {
+                        "component_id": target.get("i"),
+                        "huawei_product": target.get("p"),
+                        "quantity": target.get("q"),
+                        "unit": target.get("u"),
+                        "spec_hint": target.get("x"),
+                        "vcpu": target.get("c"),
+                        "memory_gib": target.get("m"),
+                        "capacity_gib": capacity_value,
+                        "tier": tier_value,
+                        "billing_basis": target.get("b"),
+                        "manual_review_reason": target.get("mr"),
+                    }
+                )
+            compact_ref = raw.get("r")
+            compact_refs = [compact_ref] if isinstance(compact_ref, str) else compact_ref or []
+            source_block = source_block_by_ref.get(compact_refs[0], []) if compact_refs else []
+            source_line = source_block[0] if source_block else ""
+            source_columns = [part.strip() for part in re.split(r"\s{2,}", source_line.strip()) if part.strip()]
+            source_service = source_columns[0] if source_columns else f"Cloud service {item_index}"
+            source_service = re.sub(r"\s*-+\s*$", "", source_service).strip()
+            continuation_parts: list[str] = []
+            for block_line in source_block[1:]:
+                if re.match(r"^(Status|Description\s*:|Config summary)\b", block_line, re.I):
+                    break
+                continuation = re.split(r"\s{2,}", block_line.strip())[0].strip()
+                if continuation:
+                    continuation_parts.append(continuation)
+            if continuation_parts:
+                source_service = " ".join([source_service, *continuation_parts]).strip()
+            source_region = source_columns[-3] if len(source_columns) >= 5 else None
+            detail_lines = source_block[1 + len(continuation_parts) :]
+            detail_lines = [
+                line
+                for line in detail_lines
+                if not (
+                    line.lower().startswith("name")
+                    and "monthly cost" in line.lower()
+                )
+            ]
+            config_text = " ".join(detail_lines)
+            raw = {
+                "item_id": raw.get("i") or f"source-{item_index}",
+                "vendor": raw.get("v") or default_vendor,
+                "source_refs": compact_refs,
+                "source_service_name": raw.get("s") or source_service,
+                "description": raw.get("d"),
+                "source_region": raw.get("rg") or source_region,
+                "environment": raw.get("e"),
+                "source_config_summary": raw.get("g") or config_text[:2000] or None,
+                "source_quantity": raw.get("q") or next(
+                    (
+                        target.get("quantity")
+                        for target in compact_targets
+                        if target.get("quantity") is not None
+                    ),
+                    None,
+                ),
+                "source_billing_basis": raw.get("b") or "monthly estimate",
+                "target_components": compact_targets,
+                "manual_review_reason": raw.get("mr"),
+            }
+        try:
+            item = CloudBillingAnalyzedItem.model_validate(raw)
+        except Exception as exc:
+            logger.warning("Full-document item rejected by schema validation: %s", exc)
+            continue
+
+        valid_refs = list(dict.fromkeys(ref for ref in item.source_refs if ref in line_by_ref))
+        cost_refs = [
+            ref for ref in valid_refs
+            if _source_line_monthly_amount(str(line_by_ref[ref].get("text") or "")) is not None
+        ]
+        if not valid_refs or not cost_refs:
+            logger.warning("Full-document item %s has no valid source amount ref", item.item_id)
+            continue
+        if any(ref in claimed_cost_refs for ref in cost_refs):
+            logger.warning("Full-document item %s reuses an owned source amount ref", item.item_id)
+            continue
+
+        source_total = sum(
+            _source_line_monthly_amount(str(line_by_ref[ref].get("text") or "")) or 0.0
+            for ref in cost_refs
+        )
+        claimed_cost_refs.update(cost_refs)
+
+        targets: list[CloudBillingTargetComponent] = []
+        for index, component in enumerate(item.target_components, start=1):
+            component_id = component.component_id.strip() or f"{item.item_id}-component-{index}"
+            if component_id in component_ids:
+                component_id = f"{item.item_id}-component-{index}"
+            component_ids.add(component_id)
+            product = component.huawei_product
+            manual_reason = component.manual_review_reason
+            if product and product not in _ALLOWED_HUAWEI_PRODUCTS:
+                manual_reason = f"Unsupported Huawei product suggested by LLM: {product}"
+                product = None
+            quantity = component.quantity
+            if quantity is not None and quantity <= 0:
+                quantity = None
+                manual_reason = manual_reason or "Target quantity is not positive."
+            targets.append(
+                component.model_copy(
+                    update={
+                        "component_id": component_id,
+                        "huawei_product": product,
+                        "quantity": quantity,
+                        "manual_review_reason": manual_reason,
+                    }
+                )
+            )
+        if not targets:
+            targets.append(
+                CloudBillingTargetComponent(
+                    component_id=f"{item.item_id}-review-placeholder",
+                    quantity=item.source_quantity,
+                    manual_review_reason=(
+                        item.manual_review_reason
+                        or "First-pass analysis did not identify a confident Huawei target."
+                    ),
+                )
+            )
+
+        validated.append(
+            item.model_copy(
+                update={
+                    "source_refs": valid_refs,
+                    "source_monthly_total_usd": round(source_total, 2),
+                    "target_components": targets,
+                }
+            )
+        )
+
+    declared_total = round(sum(declared_totals), 2) if declared_totals else None
+    analyzed_total = round(sum(item.source_monthly_total_usd or 0.0 for item in validated), 2)
+    if declared_total is not None and abs(analyzed_total - declared_total) > 0.02:
+        logger.warning(
+            "Full-document analysis rejected: item total %.2f does not match declared %.2f",
+            analyzed_total,
+            declared_total,
+        )
+        return []
+    return validated
+
+
+def _default_component_unit(product: str) -> str:
+    if product in {"EVS", "OBS", "SFS Turbo"}:
+        return "capacity gib month"
+    if product == "EIP":
+        return "ip-month"
+    if product in {"VPN", "NAT Gateway", "Direct Connect as a Service"}:
+        return "gateway-month"
+    if product in {"CBR", "HSS"}:
+        return "protected-server-month"
+    return "instance-month"
+
+
+def _component_spec(component: CloudBillingTargetComponent):
+    product = component.huawei_product
+    if product == "ECS":
+        return ComputeSpec(
+            vcpu=component.vcpu,
+            memory_gib=component.memory_gib,
+            sku=component.spec_hint,
+        )
+    if product in {"EVS", "OBS", "SFS Turbo"}:
+        return StorageSpec(
+            capacity_gib=component.capacity_gib or component.quantity,
+            tier=component.tier,
+            sku=component.spec_hint,
+        )
+    if product in {"ELB", "WAF", "VPN", "EIP", "NAT Gateway", "Direct Connect as a Service"}:
+        return NetworkSpec(tier=component.tier, sku=component.spec_hint)
+    return GenericSpec(
+        tier=component.tier,
+        sku=component.spec_hint,
+        description=component.spec_hint,
+    )
+
+
+def _requirements_from_document_analysis(
+    items: list[CloudBillingAnalyzedItem],
+    filename: str,
+) -> tuple[list[dict[str, Any]], list[CloudBillingAnalyzedItem]]:
+    requirements: list[dict[str, Any]] = []
+    updated_items: list[CloudBillingAnalyzedItem] = []
+    for item_index, item in enumerate(items, start=1):
+        components: list[CloudBillingTargetComponent] = []
+        for component_index, component in enumerate(item.target_components, start=1):
+            product = component.huawei_product
+            if not product or component.quantity is None or component.quantity <= 0:
+                components.append(component)
+                continue
+            requirement_id = f"billing-doc::{item.item_id}::{component.component_id}"
+            notes = " | ".join(
+                [
+                    f"analysis_parent={item.item_id}",
+                    f"component_id={component.component_id}",
+                    f"vendor={item.vendor}",
+                    f"source_refs={item.source_refs}",
+                    f"rationale={component.rationale or ''}",
+                ]
+            )
+            requirements.append(
+                RequirementItem(
+                    item_id=requirement_id,
+                    source_file=filename,
+                    source_sheet="PDF",
+                    row_number=item_index,
+                    raw_product_name=f"{product} | {item.source_service_name} | {component.spec_hint or ''}",
+                    normalized_product=product,
+                    quantity=component.quantity,
+                    quantity_source="source_file",
+                    unit=component.unit or _default_component_unit(product),
+                    spec=_component_spec(component),
+                    notes=notes,
+                ).model_dump()
+            )
+            components.append(component.model_copy(update={"requirement_item_id": requirement_id}))
+        updated_items.append(item.model_copy(update={"target_components": components}))
+    return requirements, updated_items
+
+
+def _billing_lines_from_document_analysis(
+    items: list[CloudBillingAnalyzedItem],
+    filename: str,
+) -> list[dict[str, Any]]:
+    lines: list[dict[str, Any]] = []
+    for index, item in enumerate(items, start=1):
+        lines.append(
+            {
+                "vendor": item.vendor.lower(),
+                "source_file": filename,
+                "source_sheet": "PDF",
+                "line_number": index,
+                "service_period": "",
+                "transaction_type": "pricing estimate",
+                "product_family": item.vendor,
+                "product_type": item.source_service_name,
+                "product_sku": item.source_config_summary or "",
+                "unit_type": item.source_billing_basis or "monthly estimate",
+                "quantity_raw": str(item.source_quantity or 1),
+                "amount_raw": str(item.source_monthly_total_usd or 0),
+                "currency": item.currency,
+                "region_hint": item.source_region or "",
+                "raw_row": item.model_dump(),
+                "source_refs": item.source_refs,
+                "analysis_item_id": item.item_id,
+            }
+        )
+    return lines
+
+
+def _mapping_review_payload(state: FlexibleQuoteState) -> dict[str, Any]:
+    quote_lines = [
+        {
+            "requirement_item_id": line.get("requirement_item_id"),
+            "product": line.get("product"),
+            "quantity": line.get("quantity"),
+            "unit": line.get("unit"),
+            "matched_sku": line.get("matched_sku"),
+            "matched_tier": line.get("matched_tier"),
+            "status": "quoted",
+        }
+        for line in state.get("quote_lines", [])
+    ]
+    unquoted = [
+        {
+            "requirement_item_id": item.get("item_id"),
+            "product": item.get("normalized_product"),
+            "quantity": item.get("quantity"),
+            "unit": item.get("unit"),
+            "reason": item.get("status_reason"),
+            "status": "unquoted",
+        }
+        for item in state.get("unquoted_items", [])
+    ]
+    return {
+        "quote_context": state.get("quote_context", {}),
+        "source_items": state.get("cloud_billing_analysis_items", []),
+        "mapping_results": quote_lines + unquoted,
+        "instruction": (
+            "Review product/spec/quantity only. Do not emit prices. Return only "
+            "material corrections using existing component_id values."
+        ),
+    }
+
+
+def _apply_mapping_corrections(
+    items: list[CloudBillingAnalyzedItem],
+    raw_corrections: list[dict[str, Any]],
+) -> tuple[list[CloudBillingAnalyzedItem], list[CloudBillingMappingCorrection]]:
+    corrections: dict[str, CloudBillingMappingCorrection] = {}
+    accepted: list[CloudBillingMappingCorrection] = []
+    for raw in raw_corrections:
+        try:
+            correction = CloudBillingMappingCorrection.model_validate(raw)
+        except Exception as exc:
+            logger.warning("Mapping review correction rejected by schema: %s", exc)
+            continue
+        if correction.action == "replace_product":
+            if correction.huawei_product not in _ALLOWED_HUAWEI_PRODUCTS:
+                continue
+        if correction.action == "replace_quantity":
+            if correction.quantity is None or correction.quantity <= 0:
+                continue
+        corrections[correction.component_id] = correction
+
+    updated_items: list[CloudBillingAnalyzedItem] = []
+    for item in items:
+        components: list[CloudBillingTargetComponent] = []
+        for component in item.target_components:
+            correction = corrections.get(component.component_id)
+            if not correction or correction.action == "keep":
+                components.append(component)
+                continue
+            updates: dict[str, Any] = {}
+            if correction.action == "manual_review":
+                updates["huawei_product"] = None
+                updates["requirement_item_id"] = None
+                updates["manual_review_reason"] = correction.reason or "Mapping reviewer requested manual review."
+            elif correction.action == "replace_product":
+                updates["huawei_product"] = correction.huawei_product
+                updates["manual_review_reason"] = None
+                for field in (
+                    "quantity",
+                    "unit",
+                    "spec_hint",
+                    "vcpu",
+                    "memory_gib",
+                    "capacity_gib",
+                    "tier",
+                ):
+                    value = getattr(correction, field)
+                    if value is not None and (
+                        field != "quantity" or component.quantity is None
+                    ):
+                        updates[field] = value
+            elif correction.action == "replace_quantity":
+                if component.quantity is None:
+                    updates["quantity"] = correction.quantity
+                    if correction.unit:
+                        updates["unit"] = correction.unit
+                else:
+                    components.append(component)
+                    continue
+            elif correction.action == "replace_spec":
+                for field in (
+                    "spec_hint",
+                    "vcpu",
+                    "memory_gib",
+                    "capacity_gib",
+                    "tier",
+                    "unit",
+                ):
+                    value = getattr(correction, field)
+                    if value is not None:
+                        updates[field] = value
+            if correction.reason:
+                updates["rationale"] = correction.reason
+            components.append(component.model_copy(update=updates))
+            accepted.append(correction)
+        updated_items.append(item.model_copy(update={"target_components": components}))
+    return updated_items, accepted
+
+
+def review_cloud_billing_mapping_with_llm(state: FlexibleQuoteState) -> FlexibleQuoteState:
+    """Run a second, price-free LLM review and deterministically reprice changes."""
+    raw_items = state.get("cloud_billing_analysis_items", [])
+    if not raw_items:
+        return state
+
+    _report_progress(
+        state,
+        "review_cloud_billing_mapping_with_llm",
+        "running",
+        "Reviewing product mapping with the LLM.",
+    )
+    parsed = _call_cloud_billing_json(
+        _FULL_DOCUMENT_REVIEW_SYSTEM_PROMPT,
+        _mapping_review_payload(state),
+    )
+    if not parsed:
+        message = "Mapping review was unavailable; retained the validated first-pass mapping."
+        _report_progress(state, "review_cloud_billing_mapping_with_llm", "completed", message)
+        state["audit_log"] = _append_audit(
+            state,
+            "review_cloud_billing_mapping_with_llm",
+            message,
+        )
+        return state
+
+    items = [CloudBillingAnalyzedItem.model_validate(item) for item in raw_items]
+    reviewed_items, accepted = _apply_mapping_corrections(
+        items,
+        parsed.get("corrections", []),
+    )
+    if not accepted:
+        message = "Mapping review completed with no accepted material corrections."
+        _report_progress(state, "review_cloud_billing_mapping_with_llm", "completed", message)
+        state["cloud_billing_mapping_review"] = []
+        state["audit_log"] = _append_audit(
+            state,
+            "review_cloud_billing_mapping_with_llm",
+            message,
+        )
+        return state
+
+    files = state.get("files", [])
+    filename = str(files[0].get("filename") if files else "cloud-billing.pdf")
+    requirements, reviewed_items = _requirements_from_document_analysis(reviewed_items, filename)
+    working = dict(state)
+    working["requirements"] = requirements
+    working["cloud_billing_analysis_items"] = [item.model_dump() for item in reviewed_items]
+    working["cloud_billing_mapping_review"] = [item.model_dump() for item in accepted]
+
+    # Re-run every deterministic stage affected by product/spec/quantity changes.
+    for node in (
+        normalize_requirements,
+        deduplicate_cloud_billing_requirements,
+        map_to_huawei_product,
+        validate_quote_readiness,
+        resolve_price_components,
+        quote_items,
+    ):
+        working.update(node(working))
+
+    message = f"Applied {len(accepted)} mapping correction(s) and repriced from the local catalog."
+    _report_progress(working, "review_cloud_billing_mapping_with_llm", "completed", message)
+    working["audit_log"] = _append_audit(
+        working,
+        "review_cloud_billing_mapping_with_llm",
+        message,
+    )
+    return working
+
+
+def _compose_analyzed_document_final_items(state: FlexibleQuoteState) -> list[CloudBillingFinalQuoteItem]:
+    """Compose reviewed document items without recounting source amounts."""
+    items = [
+        CloudBillingAnalyzedItem.model_validate(item)
+        for item in state.get("cloud_billing_analysis_items", [])
+    ]
+    qls_by_req: dict[str, list[FlexibleQuoteLine]] = {}
+    for raw in state.get("quote_lines", []):
+        try:
+            line = FlexibleQuoteLine.model_validate(raw)
+        except Exception:
+            continue
+        qls_by_req.setdefault(line.requirement_item_id, []).append(line)
+    unquoted_ids = {str(item.get("item_id") or "") for item in state.get("unquoted_items", [])}
+
+    final_items: list[CloudBillingFinalQuoteItem] = []
+    for index, item in enumerate(items, start=1):
+        quote_lines_for_item: list[FlexibleQuoteLine] = []
+        quoted_component_count = 0
+        unquoted_component_count = 0
+        manual_reasons: list[str] = []
+        hinted_products: list[str] = []
+        for component in item.target_components:
+            if component.huawei_product:
+                hinted_products.append(component.huawei_product)
+            req_id = component.requirement_item_id
+            component_lines = qls_by_req.get(req_id or "", [])
+            if component_lines:
+                quoted_component_count += 1
+                quote_lines_for_item.extend(component_lines)
+            elif component.manual_review_reason or not component.huawei_product or not req_id:
+                manual_reasons.append(
+                    component.manual_review_reason
+                    or f"{component.component_id} requires manual product/specification review."
+                )
+            elif req_id in unquoted_ids:
+                unquoted_component_count += 1
+            else:
+                unquoted_component_count += 1
+
+        target_count = len(item.target_components)
+        if target_count and quoted_component_count == target_count:
+            status: FinalQuoteItemStatus = "quoted"
+            manual_reason = None
+        elif quoted_component_count:
+            status = "partial"
+            manual_reason = (
+                f"Partially quoted: {quoted_component_count}/{target_count} target component(s) priced."
+            )
+        elif manual_reasons or item.manual_review_reason or not target_count:
+            status = "manual_review"
+            manual_reason = item.manual_review_reason or "; ".join(manual_reasons) or "No confident Huawei product mapping."
+        else:
+            status = "unquoted"
+            manual_reason = f"No pricing available for {unquoted_component_count} target component(s)."
+
+        products = list(dict.fromkeys(line.product for line in quote_lines_for_item))
+        if not products:
+            products = list(dict.fromkeys(hinted_products))
+        huawei_product = " + ".join(products) if products else None
+        huawei_total = sum(line.monthly_price for line in quote_lines_for_item) or None
+        single_line = quote_lines_for_item[0] if len(quote_lines_for_item) == 1 else None
+        specs = [
+            f"{line.product}: {line.matched_sku or line.matched_tier or line.billing_mode}"
+            for line in quote_lines_for_item
+        ]
+        if not specs:
+            specs = [
+                f"{component.huawei_product}: {component.spec_hint}"
+                for component in item.target_components
+                if component.huawei_product and component.spec_hint
+            ]
+        primary_product = products[0] if products else None
+        final_items.append(
+            _normalize_final_quote_item_for_export(
+                CloudBillingFinalQuoteItem(
+                    item_id=f"fqi-document-{index}",
+                    vendor=_normalize_vendor(item.vendor),
+                    resource_kind=_classify_resource_kind(None, primary_product),
+                    source_service_family=item.vendor,
+                    source_service_name=item.source_service_name,
+                    source_config_summary=item.source_config_summary or item.description,
+                    source_quantity=item.source_quantity,
+                    source_pricing_basis=item.source_billing_basis,
+                    source_monthly_total_usd=item.source_monthly_total_usd,
+                    huawei_product=huawei_product,
+                    huawei_spec_summary=" | ".join(specs) or None,
+                    huawei_quantity=single_line.quantity if single_line else None,
+                    huawei_unit_price_usd=single_line.unit_price if single_line else None,
+                    huawei_billing_basis=single_line.billing_mode if single_line else ("composite" if quote_lines_for_item else None),
+                    huawei_monthly_total_usd=round(huawei_total, 2) if huawei_total is not None else None,
+                    status=status,
+                    composition_notes=[
+                        "Complete-document LLM extraction; deterministic source reconciliation and catalog pricing.",
+                    ],
+                    source_item_ids=item.source_refs,
+                    manual_review_reason=manual_reason,
+                )
+            )
+        )
+    return final_items
 
 def _validate_and_enrich_llm_first_candidates(
     candidates_raw: list[dict[str, Any]],
@@ -2362,10 +3231,22 @@ def compose_final_billing_quote_items_with_llm(state: FlexibleQuoteState) -> Fle
     The LLM decides grouping and naming; deterministic rules validate,
     price, and correct the output.
     """
-    from app.flexible_workflow import _append_audit, _report_progress
-
     _report_progress(state, "compose_final_billing_quote_items_with_llm", "running",
                      "Composing final quotation items (LLM-first).")
+
+    if state.get("cloud_billing_analysis_items"):
+        final_items = _compose_analyzed_document_final_items(state)
+        state["final_billing_quote_items"] = [item.model_dump() for item in final_items]
+        state["llm_composition_candidates"] = []
+        state["audit_log"] = _append_audit(
+            state,
+            "compose_final_billing_quote_items_with_llm",
+            (
+                f"Composed {len(final_items)} final item(s) from the reviewed "
+                "complete-document analysis."
+            ),
+        )
+        return state
 
     agg_items = state.get("llm_aggregated_billing_items", [])
     quote_lines_raw = state.get("quote_lines", [])
@@ -2722,12 +3603,13 @@ def build_cloud_billing_preview_graph():
     graph.add_node("parse_documents", parse_documents)
     graph.add_node("extract_requirement_items", extract_cloud_billing_requirement_items)
     graph.add_node("normalize_requirements", normalize_requirements)
-    graph.add_node("deduplicate_items", deduplicate_items)
+    graph.add_node("deduplicate_items", deduplicate_cloud_billing_requirements)
     graph.add_node("map_to_huawei_product", map_to_huawei_product)
     graph.add_node("validate_quote_readiness", validate_quote_readiness)
     graph.add_node("return_blockers", return_blockers)
     graph.add_node("resolve_price_components", resolve_price_components)
     graph.add_node("quote_items", quote_items)
+    graph.add_node("review_cloud_billing_mapping_with_llm", review_cloud_billing_mapping_with_llm)
     graph.add_node("compose_final_billing_quote_items_with_llm", compose_final_billing_quote_items_with_llm)
     graph.add_node("summarize_quote", summarize_quote)
 
@@ -2742,7 +3624,8 @@ def build_cloud_billing_preview_graph():
     graph.add_conditional_edges("validate_quote_readiness", _route_after_validation, {"needs_input": "return_blockers", "ready": "resolve_price_components"})
     graph.add_edge("return_blockers", "summarize_quote")
     graph.add_edge("resolve_price_components", "quote_items")
-    graph.add_edge("quote_items", "compose_final_billing_quote_items_with_llm")
+    graph.add_edge("quote_items", "review_cloud_billing_mapping_with_llm")
+    graph.add_edge("review_cloud_billing_mapping_with_llm", "compose_final_billing_quote_items_with_llm")
     graph.add_edge("compose_final_billing_quote_items_with_llm", "summarize_quote")
     graph.add_edge("summarize_quote", END)
     return graph.compile()
@@ -2759,6 +3642,7 @@ def build_cloud_billing_review_graph():
     graph.add_node("return_blockers", return_blockers)
     graph.add_node("resolve_price_components", resolve_price_components)
     graph.add_node("quote_items", quote_items)
+    graph.add_node("review_cloud_billing_mapping_with_llm", review_cloud_billing_mapping_with_llm)
     graph.add_node("compose_final_billing_quote_items_with_llm", compose_final_billing_quote_items_with_llm)
     graph.add_node("summarize_quote", summarize_quote)
 
@@ -2767,7 +3651,8 @@ def build_cloud_billing_review_graph():
     graph.add_conditional_edges("validate_quote_readiness", _route_after_validation, {"needs_input": "return_blockers", "ready": "resolve_price_components"})
     graph.add_edge("return_blockers", "summarize_quote")
     graph.add_edge("resolve_price_components", "quote_items")
-    graph.add_edge("quote_items", "compose_final_billing_quote_items_with_llm")
+    graph.add_edge("quote_items", "review_cloud_billing_mapping_with_llm")
+    graph.add_edge("review_cloud_billing_mapping_with_llm", "compose_final_billing_quote_items_with_llm")
     graph.add_edge("compose_final_billing_quote_items_with_llm", "summarize_quote")
     graph.add_edge("summarize_quote", END)
     return graph.compile()
@@ -2788,6 +3673,7 @@ def build_cloud_billing_export_graph():
     graph.add_node("return_blockers", return_blockers)
     graph.add_node("resolve_price_components", resolve_price_components)
     graph.add_node("quote_items", quote_items)
+    graph.add_node("review_cloud_billing_mapping_with_llm", review_cloud_billing_mapping_with_llm)
     graph.add_node("compose_final_billing_quote_items_with_llm", compose_final_billing_quote_items_with_llm)
     graph.add_node("summarize_quote", summarize_quote)
     graph.add_node("export_cloud_billing_workbook", export_cloud_billing_workbook)
@@ -2797,7 +3683,8 @@ def build_cloud_billing_export_graph():
     graph.add_conditional_edges("validate_quote_readiness", _route_after_validation, {"needs_input": "return_blockers", "ready": "resolve_price_components"})
     graph.add_edge("return_blockers", "summarize_quote")
     graph.add_edge("resolve_price_components", "quote_items")
-    graph.add_edge("quote_items", "compose_final_billing_quote_items_with_llm")
+    graph.add_edge("quote_items", "review_cloud_billing_mapping_with_llm")
+    graph.add_edge("review_cloud_billing_mapping_with_llm", "compose_final_billing_quote_items_with_llm")
     graph.add_edge("compose_final_billing_quote_items_with_llm", "summarize_quote")
     graph.add_edge("summarize_quote", "export_cloud_billing_workbook")
     graph.add_edge("export_cloud_billing_workbook", END)

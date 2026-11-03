@@ -1,0 +1,367 @@
+/* Focused visual improvements for the migration hero only. */
+.migration-page {
+  --migration-ink: #111820;
+  --migration-muted: #667085;
+  --migration-line: #dfe3e8;
+}
+
+/* Retired migration-hero restyle: the base hero remains the visual source of truth.
+.migration-hero-banner.hero-section.cloud-hero {
+  min-height: min(650px, calc(100vh - 72px));
+  padding: 42px 0 28px;
+  background: #fff;
+}
+
+.migration-hero-banner.hero-section.cloud-hero::before {
+  inset: 0;
+  background-image: linear-gradient(90deg, rgba(17, 24, 32, 0.035) 1px, transparent 1px);
+  background-size: 160px 100%;
+  mask-image: linear-gradient(90deg, transparent, #000 40%, #000 86%, transparent);
+  opacity: 0.55;
+}
+
+.migration-hero-banner.hero-section.cloud-hero::after,
+.migration-hero-banner .cloud-hero-background {
+  display: none;
+}
+
+.migration-hero-banner .cloud-hero-inner {
+  width: min(1440px, calc(100% - 112px));
+  min-height: 560px;
+  grid-template-columns: minmax(450px, 0.46fr) minmax(0, 0.54fr);
+  gap: clamp(38px, 4vw, 72px);
+}
+
+.migration-hero-banner .cloud-hero-copy,
+.migration-hero-banner .cloud-hero-visual,
+.migration-hero-banner .cloud-hero-copy h1,
+.migration-hero-banner .cloud-hero-subtitle,
+.migration-hero-banner .cloud-hero-capabilities,
+.migration-hero-banner .cloud-hero-actions {
+  animation: none;
+  opacity: 1;
+  transform: none;
+}
+
+.migration-hero-banner .cloud-hero-copy {
+  align-self: center;
+  max-width: 600px;
+  color: var(--migration-ink);
+}
+
+.migration-hero-banner .cloud-hero-copy h1 {
+  max-width: 13ch;
+  color: var(--migration-ink);
+  font-size: clamp(52px, 4.35vw, 70px);
+  font-family: Inter, Arial, Helvetica, "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-weight: 700;
+  line-height: 0.99;
+  letter-spacing: -0.052em;
+}
+
+.migration-hero-banner .cloud-hero-subtitle {
+  max-width: 570px;
+  margin-top: 24px;
+  color: var(--migration-muted);
+  font-size: clamp(17px, 1.25vw, 19px);
+  line-height: 1.6;
+}
+
+.migration-hero-banner .cloud-hero-capabilities {
+  display: flex;
+  max-width: 620px;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 10px;
+  margin-top: 30px;
+  color: #313946;
+  font-size: 0.88rem;
+  font-weight: 720;
+}
+
+.migration-hero-banner .cloud-hero-capabilities li {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  padding: 0;
+  border: 0;
+}
+
+.migration-hero-banner .migration-capability {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+.migration-hero-banner .migration-capability-icon {
+  display: inline-grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  border: 1px solid #e3e7ec;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 5px 14px rgba(17, 24, 32, 0.05);
+}
+.migration-hero-banner .migration-capability svg { color: #c7000b; stroke-width: 1.8; }
+.migration-hero-banner .migration-capability-arrow { width: 20px; height: 20px; color: #c6cdd5; stroke-width: 1.6; }
+.migration-hero-banner .cloud-hero-capabilities li::before { display: none; }
+
+.migration-hero-banner .cloud-hero-actions { gap: 12px; margin-top: 28px; }
+.migration-hero-banner.cloud-hero .primary-action,
+.migration-hero-banner.cloud-hero .secondary-action {
+  min-height: 52px;
+  padding-inline: 14px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 760;
+}
+.migration-hero-banner.cloud-hero .primary-action { background: #c7000b; box-shadow: none; }
+.migration-hero-banner.cloud-hero .primary-action:hover,
+.migration-hero-banner.cloud-hero .primary-action:focus-visible { background: #a80009; box-shadow: none; transform: translateY(-2px); }
+.migration-hero-banner.cloud-hero .secondary-action { border-color: #9098a3; background: #fff; color: var(--migration-ink); box-shadow: none; }
+.migration-hero-banner.cloud-hero .secondary-action:hover,
+.migration-hero-banner.cloud-hero .secondary-action:focus-visible { border-color: #c7000b; color: #c7000b; box-shadow: none; transform: translateY(-2px); }
+
+.migration-hero-banner .cloud-hero-visual { justify-self: stretch; }
+.migration-hero-banner .cloud-network-card,
+.migration-hero-banner .cloud-network-card:hover {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  animation: none;
+  transform: none;
+  backdrop-filter: none;
+}
+.migration-hero-banner .cloud-network-card::before,
+.migration-hero-banner .cloud-network-card::after,
+.migration-hero-banner .network-low-poly { display: none; }
+.migration-hero-banner .network-link { stroke: #d5d9df; stroke-width: 3; }
+.migration-hero-banner .network-link-flow { stroke: #c7000b; stroke-width: 1.75; stroke-dasharray: 2 14; animation: linkDashFlow 2.1s linear infinite; }
+.migration-hero-banner .network-pulse { fill: #c7000b; filter: drop-shadow(0 0 5px rgba(199, 0, 11, 0.52)); }
+.migration-hero-banner .network-center-ring { fill: #fff; stroke: #c7000b; stroke-width: 2; }
+.migration-hero-banner .network-center-cloud { fill: none; stroke: #c7000b; stroke-width: 8; stroke-linecap: round; stroke-linejoin: round; }
+.migration-hero-banner .network-center-huawei-mark { fill: #c7000b; }
+.migration-hero-banner .network-center-node text { fill: var(--migration-ink); font-size: 18px; font-weight: 820; letter-spacing: 0.03em; text-transform: uppercase; }
+.migration-hero-banner .network-node { animation: none; }
+.migration-hero-banner .network-node-glow { display: none; }
+.migration-hero-banner .network-node rect { fill: #fff; stroke: #d9dde3; stroke-width: 1; filter: drop-shadow(0 6px 10px rgba(17, 24, 32, 0.07)); }
+.migration-hero-banner .network-node text { fill: #313946; font-size: 16px; font-weight: 760; }
+.migration-hero-banner .network-platform-mark { pointer-events: none; }
+.migration-hero-banner .network-platform-mark text { fill: #fff; font-size: 9px; font-weight: 800; }
+
+The original negative offset was designed for the previous oversized hero.
+.migration-scenario-section { margin-top: 0; }
+
+@media (max-width: 1120px) {
+  .migration-hero-banner.hero-section.cloud-hero { min-height: auto; }
+  .migration-hero-banner .cloud-hero-inner { width: min(100% - 64px, 1080px); grid-template-columns: minmax(360px, .46fr) minmax(0, .54fr); gap: 30px; }
+}
+
+@media (max-width: 820px) {
+  .migration-hero-banner.hero-section.cloud-hero { padding: 44px 0 34px; }
+  .migration-hero-banner .cloud-hero-inner { width: min(100% - 36px, 680px); min-height: 0; grid-template-columns: 1fr; gap: 32px; }
+  .migration-hero-banner .cloud-hero-copy h1 { max-width: 12ch; font-size: clamp(2.8rem, 9.2vw, 4.6rem); }
+}
+
+@media (max-width: 560px) {
+  .migration-hero-banner .cloud-hero-inner { width: min(100% - 28px, 520px); }
+  .migration-hero-banner .cloud-hero-copy h1 { font-size: clamp(2.45rem, 12vw, 3.35rem); }
+  .migration-hero-banner .cloud-hero-capabilities { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .migration-hero-banner .cloud-hero-capabilities li { min-height: 54px; gap: 0; }
+  .migration-hero-banner .migration-capability-icon { width: 50px; height: 50px; }
+  .migration-hero-banner .migration-capability-arrow { display: none; }
+  .migration-hero-banner .cloud-hero-actions { display: grid; }
+  .migration-hero-banner.cloud-hero .primary-action,
+  .migration-hero-banner.cloud-hero .secondary-action { width: 100%; }
+  .migration-hero-banner .cloud-network-card { margin-inline: -12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .migration-hero-banner .network-link-flow { animation: none; }
+}
+*/
+
+/* Preserve only the requested Assessment → Migration → Modernization process treatment. */
+.migration-hero-banner .cloud-hero-capabilities {
+  align-items: center;
+  gap: 10px;
+}
+
+.migration-hero-banner .cloud-hero-capabilities li {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 0;
+}
+
+.migration-hero-banner .cloud-hero-capabilities li::before {
+  display: none;
+}
+
+.migration-hero-banner .migration-capability {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.migration-hero-banner .migration-capability-icon {
+  display: inline-grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  border: 1px solid #e3e7ec;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 5px 14px rgba(17, 24, 32, 0.05);
+}
+
+.migration-hero-banner .migration-capability svg {
+  color: #c7000b;
+  stroke-width: 1.8;
+}
+
+.migration-hero-banner .migration-capability-arrow {
+  width: 20px;
+  height: 20px;
+  color: #c6cdd5;
+  stroke-width: 1.6;
+}
+
+/* Huawei Cloud-inspired hero: neutral white space, warm red light, and an open network visual. */
+.migration-hero-banner.hero-section.cloud-hero {
+  background:
+    radial-gradient(680px 380px at 83% 44%, rgba(255, 225, 221, 0.68), transparent 66%),
+    radial-gradient(500px 280px at 70% 11%, rgba(255, 242, 229, 0.78), transparent 70%),
+    #ffffff;
+}
+
+.migration-hero-banner.hero-section.cloud-hero::before {
+  display: none;
+}
+
+.migration-hero-banner.hero-section.cloud-hero::after {
+  height: 96px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, #ffffff 100%);
+}
+
+.migration-hero-banner .cloud-hero-orb-primary,
+.migration-hero-banner .cloud-hero-orb-secondary {
+  display: none;
+}
+
+.migration-hero-banner .cloud-hero-inner {
+  gap: clamp(40px, 4vw, 62px);
+}
+
+.migration-hero-banner .cloud-hero-copy h1 {
+  color: #171717;
+}
+
+.migration-hero-banner .cloud-hero-subtitle {
+  color: #5f6368;
+}
+
+.migration-hero-banner .cloud-network-card,
+.migration-hero-banner .cloud-network-card:hover {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.migration-hero-banner .cloud-network-card::before,
+.migration-hero-banner .cloud-network-card::after,
+.migration-hero-banner .network-low-poly {
+  display: none;
+}
+
+.migration-hero-banner .network-link {
+  stroke: rgba(130, 130, 130, 0.2);
+  stroke-width: 2.5;
+}
+
+.migration-hero-banner .network-link-flow {
+  stroke: url(#migrationLinkGradient);
+  stroke-width: 1.6;
+  stroke-dasharray: 2 14;
+}
+
+.migration-hero-banner .network-center-ring {
+  fill: rgba(255, 255, 255, 0.9);
+  stroke: rgba(199, 0, 11, 0.56);
+  stroke-width: 1.7;
+}
+
+.migration-hero-banner .network-center-core {
+  fill: #c7000b;
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.migration-hero-banner .network-node-glow {
+  fill: rgba(199, 0, 11, 0.055);
+}
+
+.migration-hero-banner .network-node rect {
+  fill: #ffffff;
+  stroke: rgba(35, 35, 35, 0.1);
+  filter: drop-shadow(0 8px 18px rgba(28, 28, 28, 0.075));
+}
+
+.migration-hero-banner .network-node text {
+  fill: #303030;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .migration-hero-banner .network-center-node {
+    transform-origin: 360px 280px;
+    animation: migration-cloud-breathe 4.8s ease-in-out infinite;
+  }
+
+  .migration-hero-banner .network-node {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: migration-node-float 5.6s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes migration-cloud-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.025); }
+}
+
+@keyframes migration-node-float {
+  from { transform: translateY(-2px); }
+  to { transform: translateY(3px); }
+}
+
+@media (max-width: 560px) {
+  .migration-hero-banner .cloud-hero-capabilities {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .migration-hero-banner .migration-capability-arrow {
+    display: none;
+  }
+}
+
+/* Keep all migration detail heroes aligned: service tags need the same breathing room after the description. */
+.migration-scenario-template-page .migration-template-hero-copy .tag-row {
+  margin: 24px 0 0;
+}
+
+@media (max-width: 640px) {
+  .migration-scenario-template-page .migration-template-hero-copy .tag-row {
+    margin-top: 20px;
+  }
+
+}

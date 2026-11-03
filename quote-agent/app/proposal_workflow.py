@@ -30,7 +30,7 @@ def generate_proposal_stub(request: ProposalRequest, artifacts_dir: Path) -> dic
             "current_challenges": request.current_pain_points,
             "target_solution": request.target_outcomes,
             "pricing_summary": "Pricing details to be added in Phase 2.",
-            "next_steps": "Next steps to be added in Phase 2.",
+            "next_steps": "",
         },
     }
     json_path = artifacts_dir / f"{basename}.json"
@@ -82,7 +82,7 @@ def generate_proposal_with_hld_stub(
             "current_challenges": cs.current_challenges or request.current_pain_points,
             "target_solution": cs.target_solution or request.target_outcomes,
             "pricing_summary": cs.pricing_summary or "Pricing details to be refined.",
-            "next_steps": cs.next_steps or "Next steps to be determined.",
+            "next_steps": cs.next_steps,
         }
     else:
         sections = {
@@ -90,7 +90,7 @@ def generate_proposal_with_hld_stub(
             "current_challenges": request.current_pain_points,
             "target_solution": request.target_outcomes,
             "pricing_summary": "Pricing details to be added in Phase 2.",
-            "next_steps": "Next steps to be added in Phase 2.",
+            "next_steps": "",
         }
 
     # Build proposal.json content
@@ -98,6 +98,7 @@ def generate_proposal_with_hld_stub(
         "project_name": request.project_name,
         "customer_name": request.customer_name or "",
         "country": request.country or "",
+        "customer_brief": request.customer_brief or "",
         "business_background": request.business_background,
         "current_pain_points": request.current_pain_points,
         "target_outcomes": request.target_outcomes,

@@ -393,6 +393,67 @@ class CloudBillingFinalCompositionCandidate(BaseModel):
     confidence: float | None = None
 
 
+class CloudBillingTargetComponent(BaseModel):
+    """A Huawei Cloud target component proposed from a complete source document."""
+
+    component_id: str
+    huawei_product: str | None = None
+    quantity: float | None = None
+    unit: str | None = None
+    spec_hint: str | None = None
+    vcpu: int | None = None
+    memory_gib: float | None = None
+    capacity_gib: float | None = None
+    tier: str | None = None
+    billing_basis: str | None = None
+    rationale: str | None = None
+    confidence: float | None = None
+    requirement_item_id: str | None = None
+    manual_review_reason: str | None = None
+
+
+class CloudBillingAnalyzedItem(BaseModel):
+    """A business-level source item extracted by the first full-document LLM."""
+
+    item_id: str
+    vendor: str
+    source_refs: list[str] = Field(default_factory=list)
+    source_service_name: str
+    description: str | None = None
+    source_region: str | None = None
+    environment: str | None = None
+    source_config_summary: str | None = None
+    source_quantity: float | None = None
+    source_billing_basis: str | None = None
+    source_monthly_total_usd: float | None = None
+    currency: str = "USD"
+    target_components: list[CloudBillingTargetComponent] = Field(default_factory=list)
+    manual_review_reason: str | None = None
+    confidence: float | None = None
+
+
+class CloudBillingMappingCorrection(BaseModel):
+    """A safe, price-free correction proposed by the second LLM."""
+
+    component_id: str
+    action: Literal[
+        "keep",
+        "replace_product",
+        "replace_spec",
+        "replace_quantity",
+        "manual_review",
+    ] = "keep"
+    huawei_product: str | None = None
+    quantity: float | None = None
+    unit: str | None = None
+    spec_hint: str | None = None
+    vcpu: int | None = None
+    memory_gib: float | None = None
+    capacity_gib: float | None = None
+    tier: str | None = None
+    reason: str | None = None
+
+
 class FlexibleQuoteSummary(BaseModel):
     total_input_items: int = 0
     quote_ready_items: int = 0
@@ -883,9 +944,10 @@ class ProposalRequest(BaseModel):
     customer_name: str | None = None
     country: str | None = None
     language: LangKey = "en"
-    business_background: str
-    current_pain_points: str
-    target_outcomes: str
+    customer_brief: str | None = None
+    business_background: str = ""
+    current_pain_points: str = ""
+    target_outcomes: str = ""
     quote_mode: ProposalQuoteMode = "skip"
     quote_input: ProposalQuoteInput | None = None
     preferred_filename: str | None = None

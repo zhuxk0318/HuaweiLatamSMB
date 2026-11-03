@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import unicodedata
 from copy import copy
 from pathlib import Path
 from datetime import datetime, timezone
@@ -42,7 +43,7 @@ from app.models import (
 )
 from app.rvtools import CPU_COLUMNS, MEMORY_GIB_COLUMNS, MEMORY_MIB_COLUMNS, OS_COLUMNS, STORAGE_GIB_COLUMNS, STORAGE_MIB_COLUMNS, VM_NAME_COLUMNS
 
-SUPPORTED_EXTENSIONS = {"xlsx", "csv", "txt"}
+SUPPORTED_EXTENSIONS = {"xlsx", "csv", "txt", "pdf"}
 
 
 def _get_billing_llm_timeout_seconds() -> int:
@@ -326,6 +327,9 @@ class FlexibleQuoteState(TypedDict, total=False):
     final_billing_quote_items: list[dict[str, Any]]
     # ── LLM composition candidates (Phase 10) ──
     llm_composition_candidates: list[dict[str, Any]]
+    # ── Full-document LLM analysis/review (PDF and future document adapters) ──
+    cloud_billing_analysis_items: list[dict[str, Any]]
+    cloud_billing_mapping_review: list[dict[str, Any]]
 
 
 class FlexibleWorkflowError(ValueError):
@@ -2444,6 +2448,10 @@ def parse_documents(state: FlexibleQuoteState) -> FlexibleQuoteState:
             documents.extend(_parse_excel_workbook(upload["content"], upload["filename"]))
         elif upload["extension"] == "csv":
             documents.append(_parse_csv_document(upload["content"], upload["filename"]))
+        elif upload["extension"] == "pdf":
+            from app.cloud_billing_document import parse_cloud_billing_pdf
+
+            documents.append(parse_cloud_billing_pdf(upload["content"], upload["filename"]))
         else:
             text = upload["content"].decode("utf-8", errors="ignore")
             rows: list[dict[str, Any]] = []
@@ -7585,6 +7593,32 @@ def _populate_billing_quotation_sheet(workbook: Any, state: FlexibleQuoteState) 
         ws.column_dimensions[ws.cell(3, idx).column_letter].width = width
 
 
+def _quoted_filename_from_state(state: FlexibleQuoteState) -> str:
+    """Build a download filename: Quoted-{first source stem}.xlsx.
+
+    Source may be .xlsx/.csv/.pdf; the original extension is stripped and the
+    export is always .xlsx. Stems are ASCII-safe. Falls back to
+    'Quoted-cloud-billing.xlsx' when no usable source name is available.
+    """
+    default = "Quoted-cloud-billing.xlsx"
+    files = state.get("files", []) or []
+    raw = ""
+    for f in files:
+        name = f.get("filename") if isinstance(f, dict) else None
+        if name:
+            raw = name
+            break
+    stem = re.sub(r"\.(xlsx|xls|csv|pdf|txt)$", "", raw, flags=re.I).strip()
+    if not stem:
+        return default
+    normalized = unicodedata.normalize("NFKD", stem)
+    ascii_stem = normalized.encode("ascii", "ignore").decode("ascii")
+    ascii_stem = re.sub(r"[^A-Za-z0-9._-]+", "-", ascii_stem).strip("-._")
+    if not ascii_stem:
+        return default
+    return f"Quoted-{ascii_stem}.xlsx"
+
+
 def _export_flexible_billing_template_workbook(state: FlexibleQuoteState) -> QuoteWorkbook:
     """Export billing quote using a template selected by profile.
 
@@ -7622,10 +7656,7 @@ def _export_flexible_billing_template_workbook(state: FlexibleQuoteState) -> Quo
     # Información sheet
     _populate_billing_info_sheet(workbook["Información"], state, profile)
 
-    quote_context = FlexibleQuoteContext.model_validate(state.get("quote_context", {}))
-    region = quote_context.region or "unknown"
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    filename = f"billing-quote-{region}-{stamp}.xlsx"
+    filename = _quoted_filename_from_state(state)
     output = BytesIO()
     workbook.save(output)
     return QuoteWorkbook(filename=filename, content=output.getvalue())
