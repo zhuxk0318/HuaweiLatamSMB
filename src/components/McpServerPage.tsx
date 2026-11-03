@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowRight, Download, Search, Shield, Terminal, Wrench, Zap } from "lucide-react";
+import { ArrowRight, Download, Github, Search, Shield, Terminal, Wrench, Zap } from "lucide-react";
 import { trackClick } from "../analytics";
 import type { Lang } from "../data/i18n";
 import {
@@ -10,6 +10,7 @@ import {
   mcpServicesCovered,
   mcpDownloadUrl,
   mcpDownloadSize,
+  mcpGitHubRepo,
   mcpServices,
   mcpCategoryOrder,
   mcpTools,
@@ -175,6 +176,16 @@ function McpHero({ lang }: { lang: Lang }) {
         <div className="mcp-hero-actions">
           <a
             className="primary-action"
+            href={mcpGitHubRepo}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => trackClick({ click_target: "mcp_github", click_section: "mcp_hero", destination: mcpGitHubRepo })}
+          >
+            <Github size={18} />
+            GitHub
+          </a>
+          <a
+            className="secondary-action"
             href={mcpDownloadUrl}
             onClick={() => trackClick({ click_target: "mcp_download", click_section: "mcp_hero", destination: mcpDownloadUrl })}
           >

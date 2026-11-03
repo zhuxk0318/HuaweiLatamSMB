@@ -6,6 +6,7 @@ export const mcpProtocolVersion = "2025-03-26";
 export const mcpTotalTools = 150; // 149 structured read-only + 1 hcloud_cli catch-all
 export const mcpStructuredTools = 149;
 export const mcpServicesCovered = 34;
+export const mcpGitHubRepo = "https://github.com/binrogithub/hcloud-mcp-server";
 export const mcpDownloadUrl = "/downloads/hcloud-mcp-server.tar.gz";
 export const mcpDownloadSize = "22 KB";
 
@@ -373,16 +374,15 @@ export const mcpInstallSteps: Array<{ step: number; title: string; commands: str
   },
   {
     step: 3,
-    title: "Download and install the MCP server",
+    title: "Install the MCP server",
     commands: [
-      "curl -LO http://huaweilatam.com/downloads/hcloud-mcp-server.tar.gz",
-      "tar xzf hcloud-mcp-server.tar.gz",
+      "git clone https://github.com/binrogithub/hcloud-mcp-server.git",
       "cd hcloud-mcp-server",
       "pip install --upgrade pip setuptools  # needed on older systems (Ubuntu 22.04)",
       "pip install .",
       "hcloud-mcp --help  # verify installation",
     ],
-    note: "Requires Python 3.10+. Dependencies: mcp>=1.27.0, pyyaml>=6.0 (installed automatically by pip).",
+    note: "Requires Python 3.10+ and git. Alternative: download tarball from http://huaweilatam.com/downloads/hcloud-mcp-server.tar.gz. Dependencies: mcp>=1.27.0, pyyaml>=6.0 (installed automatically by pip).",
   },
   {
     step: 4,

@@ -2,6 +2,7 @@ Huawei Cloud MCP Server v0.4.0 — Installation Guide
 =====================================================
 
 150 tools. 34 services. One MCP server for AI-assisted infrastructure.
+Source: https://github.com/binrogithub/hcloud-mcp-server
 Download: http://huaweilatam.com/downloads/hcloud-mcp-server.tar.gz (22 KB)
 MCP Protocol: 2025-03-26
 
@@ -9,6 +10,7 @@ PREREQUISITES
 -------------
 - Python 3.10+
 - pip
+- git
 - curl
 
 STEP 1: Install KooCLI (hcloud)
@@ -33,15 +35,23 @@ Get your AK/SK from the Huawei Cloud console: My Credentials -> Access Keys.
 
 Available regions: la-north-2, sa-brazil-1, ap-southeast-1, ap-southeast-2, etc.
 
-STEP 3: Download and install the MCP server
--------------------------------------------
+STEP 3: Install the MCP server
+------------------------------
+Recommended: clone from GitHub.
 
-  curl -LO http://huaweilatam.com/downloads/hcloud-mcp-server.tar.gz
-  tar xzf hcloud-mcp-server.tar.gz
+  git clone https://github.com/binrogithub/hcloud-mcp-server.git
   cd hcloud-mcp-server
   pip install --upgrade pip setuptools  # needed on older systems (Ubuntu 22.04)
   pip install .
   hcloud-mcp --help  # verify installation
+
+Alternative: download tarball.
+
+  curl -LO http://huaweilatam.com/downloads/hcloud-mcp-server.tar.gz
+  tar xzf hcloud-mcp-server.tar.gz
+  cd hcloud-mcp-server
+  pip install --upgrade pip setuptools
+  pip install .
 
 Dependencies (installed automatically by pip): mcp>=1.27.0, pyyaml>=6.0
 
